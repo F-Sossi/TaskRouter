@@ -1,0 +1,134 @@
+@using TaskRouter.Core.Runner
+
+@*
+    Splits a task into one branch per org unit, and names where they come back together.
+
+    The convergence task is chosen up front rather than inferred, because it is what the
+    branches converge *to* -- the engine records it on the manifest when the fork is
+    created, and every branch completing is what triggers it.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:420px;">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Splitting <b>@TaskLabel</b> into one parallel branch per unit.
+            </MudText>
+
+            @if (Branches.Count == 0)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    Nothing left to branch across.
+                </MudAlert>
+            }
+            else
+            {
+                @*  MultiSelectionTextFunc, or the closed box shows the raw keys: a branch
+                    key is an opaque host id, often a row id, so the list read the units'
+                    names while the box above it read "1, 2". *@
+                <MudSelect T="string" MultiSelection="true" @bind-SelectedValues="_selected"
+                           Label="Branches" Variant="Variant.Outlined"
+                           MultiSelectionTextFunc="@(selected => NamesOf(selected))"
+                           HelperText="At least two. One task is created per unit, all running in parallel.">
+                    @foreach (var branch in Branches)
+                    {
+                        <MudSelectItem T="string" Value="@branch.Key">@branch.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+
+            <MudSelect T="int" @bind-Value="_convergenceTaskDefinitionId" Label="Converges at"
+                       Variant="Variant.Outlined"
+                       HelperText="Created once every branch has finished.">
+                @foreach (var option in Convergences)
+                {
+                    <MudSelectItem T="int" Value="@option.TaskDefinitionId">
+                        @option.Label @(option.IsDeclaredConvergencePoint ? "(convergence point)" : "")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField T="string" @bind-Value="_notes" Label="Notes" Lines="2"
+                          Variant="Variant.Outlined" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Warning" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.CallSplit" OnClick="Save">Fork</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string TaskLabel { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<BranchOption> Branches { get; set; } = [];
+    [Parameter] public IReadOnlyList<ConvergenceOption> Convergences { get; set; } = [];
+
+    /// <summary>
+    /// The unit the task being forked already belongs to, ticked when the dialog opens.
+    ///
+    /// <para>Forking is splitting work <i>this</i> unit is holding across several, so the
+    /// unit it starts in is almost always one of them — and leaving it unticked made the
+    /// common case two clicks of housekeeping before the real choice. Untickable, because
+    /// handing the work on entirely is a legitimate if rarer thing to do.</para>
+    /// </summary>
+    [Parameter] public string? CurrentBranchKey { get; set; }
+
+    private IReadOnlyCollection<string> _selected = [];
+    private int _convergenceTaskDefinitionId;
+    private string? _notes;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        // Default to a task the workflow actually declared as a convergence point.
+        _convergenceTaskDefinitionId = Convergences
+            .FirstOrDefault(c => c.IsDeclaredConvergencePoint)?.TaskDefinitionId
+            ?? Convergences.FirstOrDefault()?.TaskDefinitionId
+            ?? 0;
+
+        // Only when the unit is still on offer. GetBranchOptionsAsync removes the ones this
+        // fork has already branched on, so a second fork would otherwise start with a tick
+        // against a unit that is not in the list.
+        if (Branches.Any(b => b.Key == CurrentBranchKey))
+        {
+            _selected = [CurrentBranchKey!];
+        }
+    }
+
+    /// <summary>What the selected keys are called, for the closed box.</summary>
+    private string NamesOf(IReadOnlyCollection<string>? selected) =>
+        selected is null or { Count: 0 }
+            ? string.Empty
+            : string.Join(", ", selected.Select(key =>
+                Branches.FirstOrDefault(b => b.Key == key)?.DisplayName ?? key));
+
+    private void Save()
+    {
+        var keys = _selected.ToList();
+
+        // The engine requires at least two: a "fork" of one is just the task itself, and
+        // it would still create a convergence step for nothing.
+        if (keys.Count < 2)
+        {
+            _error = "A fork needs at least two branches.";
+            return;
+        }
+
+        if (_convergenceTaskDefinitionId == 0)
+        {
+            _error = "Choose where the branches converge.";
+            return;
+        }
+
+        Dialog.Close(DialogResult.Ok(
+            new WorkflowRunner.ForkRequest(keys, _convergenceTaskDefinitionId, _notes)));
+    }
+}

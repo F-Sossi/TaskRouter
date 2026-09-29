@@ -1,0 +1,95 @@
+@using TaskRouter.Core.Builder
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:480px">
+
+            <MudSelect T="string" @bind-Value="_edit.OutcomeKey"
+                       Label="When the outcome is" Variant="Variant.Outlined" Required="true">
+                @foreach (var o in Outcomes)
+                {
+                    <MudSelectItem T="string" Value="@o.OutcomeKey">@o.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @* Targets a task, not a task type — which is what allows the same type to
+               appear more than once with different routing. *@
+            <MudSelect T="Guid?" @bind-Value="_edit.NextTaskLocalId"
+                       Label="Go to" Variant="Variant.Outlined" Required="true">
+                @foreach (var t in Targets)
+                {
+                    <MudSelectItem T="Guid?" Value="@t.LocalId">@t.Label</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="string" @bind-Value="_edit.ConditionKey"
+                       Label="Only if condition" Variant="Variant.Outlined" Clearable="true"
+                       HelperText="Optional. Registered by the host; blank means always.">
+                @foreach (var c in Conditions)
+                {
+                    <MudSelectItem T="string" Value="@c">@c</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSwitch T="bool" @bind-Value="_edit.IsDefault" Color="Color.Primary"
+                       Label="Default route for this outcome" />
+
+            <MudSwitch T="bool" @bind-Value="_edit.IsReworkRoute" Color="Color.Warning"
+                       Label="Sends work backwards for rework" />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                Mark rework so a convergence task knows this outcome means "send branches back",
+                rather than the engine guessing from the outcome's name.
+            </MudText>
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public RouteEditModel Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<OutcomeEditModel> Outcomes { get; set; } = [];
+    [Parameter] public IReadOnlyList<TaskEditModel> Targets { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> Conditions { get; set; } = [];
+
+    /// <summary>
+    /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
+    /// passes reference types by reference, so binding straight to the parameter wrote
+    /// changes into the caller's object the moment they were typed -- and closing with
+    /// Cancel left every one of them applied.
+    /// </summary>
+    private RouteEditModel _edit = new();
+
+    protected override void OnInitialized() => _edit = Model.Clone();
+
+    private string? _error;
+
+    private void Save()
+    {
+        if (string.IsNullOrWhiteSpace(_edit.OutcomeKey))
+        {
+            _error = "Choose an outcome.";
+            return;
+        }
+
+        if (_edit.NextTaskLocalId is null)
+        {
+            _error = "Choose a target task.";
+            return;
+        }
+
+        Model.CopyFrom(_edit);
+        Dialog.Close(DialogResult.Ok(Model));
+    }
+}

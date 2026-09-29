@@ -1,0 +1,74 @@
+@using TaskRouter.Core.Runner
+
+@*  Reassignment by actor, by org unit, or both. Both are optional and opaque to the
+    engine -- what a branch key means is entirely the host's business. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Reassigning <b>@TaskLabel</b>.
+            </MudText>
+
+            <MudSelect T="string" @bind-Value="_actorId" Label="Assign to" Clearable="true"
+                       Variant="Variant.Outlined" HelperText="Leave blank to clear the assignee.">
+                @foreach (var actor in Actors)
+                {
+                    <MudSelectItem T="string" Value="@actor.ActorId">@actor.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @*  A picker, not a text field. A branch key is an opaque host id, often a row
+                id, so asking a person to type one put "3" on screen where they think in
+                the unit's name. *@
+            <MudSelect T="string" @bind-Value="_branchKey" Label="Org unit" Clearable="true"
+                       Variant="Variant.Outlined"
+                       HelperText="Leave blank to leave the org unit alone.">
+                @foreach (var unit in OrgUnits)
+                {
+                    <MudSelectItem T="string" Value="@unit.Key">@unit.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_branchKey is not null && !OrgUnits.Any(u => u.Key == _branchKey))
+            {
+                @*  The task is in a unit the directory no longer lists -- reorganised, or
+                    renamed. Saying so beats a picker that silently shows blank and then
+                    clears the assignment on save. *@
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    Currently in <b>@_branchKey</b>, which is not in the current list.
+                </MudAlert>
+            }
+
+            <MudTextField T="string" @bind-Value="_note" Label="Reason" Lines="2"
+                          Variant="Variant.Outlined" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Reassign</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string TaskLabel { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<ActorOption> Actors { get; set; } = [];
+    [Parameter] public IReadOnlyList<BranchOption> OrgUnits { get; set; } = [];
+    [Parameter] public string? CurrentActorId { get; set; }
+    [Parameter] public string? CurrentBranchKey { get; set; }
+
+    private string? _actorId;
+    private string? _branchKey;
+    private string? _note;
+
+    protected override void OnInitialized()
+    {
+        _actorId = CurrentActorId;
+        _branchKey = CurrentBranchKey;
+    }
+
+    private void Save() => Dialog.Close(DialogResult.Ok(
+        new WorkflowRunner.ReassignRequest(_actorId, _branchKey, _note)));
+}

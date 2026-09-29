@@ -1,0 +1,108 @@
+@page "/documents/{DocumentId:int}"
+
+@inject IDbContextFactory<DemoDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>Document</PageTitle>
+
+@*
+    A document page, which is the second home of the runner component -- the first being
+    the builder's test pane. Identical component, different subject: that is the whole
+    point of building it once.
+*@
+
+<MudStack Spacing="3">
+    <MudStack Row="true" AlignItems="AlignItems.Center">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="@(() => Nav.NavigateTo("/documents"))" />
+        <MudText Typo="Typo.h5" HtmlTag="h1">@(_title ?? "Document")</MudText>
+        @if (_docNumber is not null)
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@_docNumber</MudChip>
+        }
+    </MudStack>
+
+    @if (_notFound)
+    {
+        <MudAlert Severity="Severity.Error">No document @DocumentId.</MudAlert>
+    }
+    else
+    {
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+                <MudText Typo="Typo.body2"><b>Type</b> @_documentType</MudText>
+                <MudText Typo="Typo.body2"><b>Status</b> @_status</MudText>
+                <MudSpacer />
+                <MudSelect T="string" @bind-Value="_actorId" Label="Acting as" Dense="true"
+                           Variant="Variant.Outlined" Style="min-width:220px;">
+                    @foreach (var person in _people)
+                    {
+                        <MudSelectItem T="string" Value="@person.ActorId">@person.FullName</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+        </MudPaper>
+
+        @* The host has no authentication, so who you are acting as is a picker. A real
+           host passes the signed-in user and the runner never knows the difference.
+
+           Held back until the document type is known: rendering it with an empty
+           subject type would ask the host for runs that cannot exist. *@
+        @if (!string.IsNullOrEmpty(_documentType))
+        {
+            <WorkflowRunner SubjectType="@_documentType"
+                            SubjectId="@DocumentId.ToString()"
+                            ActorId="@_actorId"
+                            OnChanged="Reload" />
+        }
+    }
+</MudStack>
+
+@code {
+    [Parameter] public int DocumentId { get; set; }
+
+    private string? _title;
+    private string? _docNumber;
+    private string _documentType = string.Empty;
+    private string _status = string.Empty;
+    private bool _notFound;
+    private string _actorId = string.Empty;
+
+    private List<PersonRow> _people = [];
+
+    protected override async Task OnParametersSetAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var doc = await db.Documents
+            .AsNoTracking()
+            .Where(d => d.Id == DocumentId)
+            .Select(d => new { d.Title, d.DocNumber, DocumentType = d.DocumentType.ToString(), Status = d.Status.ToString() })
+            .SingleOrDefaultAsync();
+
+        if (doc is null)
+        {
+            _notFound = true;
+            return;
+        }
+
+        _title = doc.Title;
+        _docNumber = doc.DocNumber;
+        _documentType = doc.DocumentType;
+        _status = doc.Status;
+
+        if (_people.Count == 0)
+        {
+            _people = await db.People.AsNoTracking()
+                .OrderBy(p => p.FullName)
+                .Select(p => new PersonRow(p.ActorId, p.FullName))
+                .ToListAsync();
+
+            _actorId = _people.FirstOrDefault()?.ActorId ?? "demo-user";
+        }
+    }
+
+    private sealed record PersonRow(string ActorId, string FullName);
+}

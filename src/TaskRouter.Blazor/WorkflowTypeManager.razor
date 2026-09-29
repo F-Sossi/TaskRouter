@@ -1,0 +1,325 @@
+@using TaskRouter.Core.Builder
+
+@inject IWorkflowBuilderClient Client
+
+@*
+    The two catalogues an author picks from: the kinds of step a workflow can have, and the
+    ways a step can end.
+
+    Both are rows rather than enums, which is what lets an organisation add its own. This is
+    where they are managed; the builder's task dialog only picks from them, plus a shortcut
+    for defining one without leaving the workflow being edited.
+
+    Retiring rather than deleting, throughout. A task definition references its task type by
+    id, so deleting one in use would orphan it and the database refuses; an outcome is copied
+    into a version by key, so deleting one cannot break a workflow but cannot un-say it
+    either. Retired means "not offered for new work" in both cases, and it is reversible.
+*@
+
+<MudStack Spacing="4">
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true"
+                  ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">
+            @_error
+        </MudAlert>
+    }
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+    }
+    else
+    {
+        @* ─────────────────────────── Task types ─────────────────────────── *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Checklist" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Task types</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    The kinds of step a workflow can contain.
+                </MudText>
+                <MudSpacer />
+                <MudSwitch T="bool" @bind-Value="_showRetired" Color="Color.Primary"
+                           Label="Show retired" Size="Size.Small" />
+            </MudStack>
+
+            <MudTable Items="@Visible(_inventory.TaskTypes)" Dense="true" Hover="true" Elevation="0"
+                      T="TypeInventoryItem">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Key</MudTh>
+                    <MudTh>Used by</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh />
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+                    <MudTd DataLabel="Key"><code>@context.Key</code></MudTd>
+                    <MudTd DataLabel="Used by">
+                        @* Across every version, superseded ones included -- a type used only
+                           by an old version is still one somebody reads history through. *@
+                        @(context.UsedBy == 0 ? "—" : $"{context.UsedBy} step(s)")
+                    </MudTd>
+                    <MudTd DataLabel="Status">
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.IsArchived ? Color.Default : Color.Success)">
+                            @(context.IsArchived ? "Retired" : "In use")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd Class="d-flex justify-end">
+                        @if (context.IsArchived)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                       Disabled="@_busy"
+                                       OnClick="@(() => RestoreTaskTypeAsync(context.Id))">
+                                Restore
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary"
+                                       Disabled="@_busy"
+                                       OnClick="@(() => ArchiveTaskTypeAsync(context.Id))">
+                                Retire
+                            </MudButton>
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-3">
+                <MudTextField T="string" @bind-Value="_newTaskTypeName" @bind-Value:after="StateHasChanged"
+                              Label="New task type" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Immediate="true" HelperText="@HelperFor(_newTaskTypeName, lower: false)" />
+                <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled"
+                           Color="Color.Primary" Disabled="@_busy" OnClick="AddTaskTypeAsync">
+                    Add
+                </MudButton>
+            </MudStack>
+        </MudPaper>
+
+        @* ─────────────────────────── Outcomes ─────────────────────────── *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.CallSplit" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">Outcomes</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    The ways a step can end. Routes are drawn from these.
+                </MudText>
+            </MudStack>
+
+            <MudTable Items="@Visible(_inventory.Outcomes)" Dense="true" Hover="true" Elevation="0"
+                      T="TypeInventoryItem">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Key</MudTh>
+                    <MudTh>Used by</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh />
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+                    <MudTd DataLabel="Key"><code>@context.Key</code></MudTd>
+                    <MudTd DataLabel="Used by">
+                        @(context.UsedBy == 0 ? "—" : $"{context.UsedBy} step(s)")
+                    </MudTd>
+                    <MudTd DataLabel="Status">
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.IsArchived ? Color.Default : Color.Success)">
+                            @(context.IsArchived ? "Retired" : "In use")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd Class="d-flex justify-end">
+                        @if (context.IsArchived)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                       Disabled="@_busy"
+                                       OnClick="@(() => RestoreOutcomeAsync(context.Id))">
+                                Restore
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary"
+                                       Disabled="@_busy"
+                                       OnClick="@(() => ArchiveOutcomeAsync(context.Id))">
+                                Retire
+                            </MudButton>
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-3">
+                <MudTextField T="string" @bind-Value="_newOutcomeName" @bind-Value:after="StateHasChanged"
+                              Label="New outcome" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Immediate="true" HelperText="@HelperFor(_newOutcomeName, lower: true)" />
+                <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled"
+                           Color="Color.Primary" Disabled="@_busy" OnClick="AddOutcomeAsync">
+                    Add
+                </MudButton>
+            </MudStack>
+
+            @if (_inventory.UncataloguedOutcomeKeys.Count > 0)
+            {
+                @*  Keys real workflows route on that the catalogue does not mention -- the
+                    normal state of a database that had workflows before it had a catalogue.
+                    They are not a problem to be cleaned up: they are what the workflows
+                    actually say, so the catalogue is the thing that is out of date. *@
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4">
+                    <MudText Typo="Typo.body2" Class="mb-2">
+                        <b>Already in use, not in the catalogue.</b> Adding one lower-cases it,
+                        so two spellings of the same outcome become one entry.
+                    </MudText>
+                    <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                        @foreach (var key in _inventory.UncataloguedOutcomeKeys)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                                       StartIcon="@Icons.Material.Filled.PlaylistAdd"
+                                       Disabled="@_busy" OnClick="@(() => AdoptAsync(key))">
+                                @key
+                            </MudButton>
+                        }
+                    </MudStack>
+                </MudAlert>
+            }
+        </MudPaper>
+    }
+</MudStack>
+
+@code {
+    private TypeInventory _inventory = new([], [], []);
+    private bool _loading = true;
+    private bool _busy;
+    private bool _showRetired;
+    private string? _error;
+
+    private string _newTaskTypeName = string.Empty;
+    private string _newOutcomeName = string.Empty;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private IReadOnlyList<TypeInventoryItem> Visible(IReadOnlyList<TypeInventoryItem> items) =>
+        _showRetired ? items : [.. items.Where(i => !i.IsArchived)];
+
+    /// <summary>
+    /// The key a name will be stored under, shown while typing. Outcomes are lower-cased and
+    /// task types are not: an outcome key is compared as a string when a route resolves and
+    /// when a host translates it, and those two comparisons did not agree about case. A task
+    /// type is referenced by id everywhere, so its case decides nothing.
+    /// </summary>
+    private static string HelperFor(string name, bool lower)
+    {
+        var key = new string([.. name.Where(char.IsLetterOrDigit)]);
+
+        return key.Length == 0
+            ? "Letters and digits become the key."
+            : $"Stored as {(lower ? key.ToLowerInvariant() : key)}";
+    }
+
+    private static string KeyFor(string name, bool lower)
+    {
+        var key = new string([.. name.Where(char.IsLetterOrDigit)]);
+        return lower ? key.ToLowerInvariant() : key;
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+
+        try
+        {
+            _inventory = await Client.GetTypeInventoryAsync();
+        }
+        catch (Exception exception)
+        {
+            // Surfaced rather than swallowed: empty tables here would read as "this
+            // organisation has defined nothing", which is a different and much more
+            // alarming claim than "this page could not load".
+            _error = $"Could not load the catalogues. {exception.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>Runs an action, reports what went wrong, and reloads either way.</summary>
+    private async Task PerformAsync(Func<Task> action)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            await action();
+        }
+        catch (Exception exception)
+        {
+            _error = exception.Message;
+        }
+        finally
+        {
+            _busy = false;
+            await LoadAsync();
+        }
+    }
+
+    private async Task AddTaskTypeAsync()
+    {
+        var name = _newTaskTypeName.Trim();
+        var key = KeyFor(name, lower: false);
+
+        if (key.Length == 0)
+        {
+            _error = "Give the task type a name with at least one letter or digit.";
+            return;
+        }
+
+        await PerformAsync(async () =>
+        {
+            _ = await Client.CreateTaskTypeAsync(key, name);
+            _newTaskTypeName = string.Empty;
+        });
+    }
+
+    private async Task AddOutcomeAsync()
+    {
+        var name = _newOutcomeName.Trim();
+        var key = KeyFor(name, lower: true);
+
+        if (key.Length == 0)
+        {
+            _error = "Give the outcome a name with at least one letter or digit.";
+            return;
+        }
+
+        await PerformAsync(async () =>
+        {
+            _ = await Client.CreateOutcomeTypeAsync(key, name);
+            _newOutcomeName = string.Empty;
+        });
+    }
+
+    /// <summary>
+    /// Takes a key that workflows already route on into the catalogue, keeping the spelling
+    /// as its name so the row is recognisable, while the key itself is canonicalised.
+    /// </summary>
+    private async Task AdoptAsync(string key) =>
+        await PerformAsync(() => Client.CreateOutcomeTypeAsync(key, key));
+
+    private async Task ArchiveTaskTypeAsync(int id) =>
+        await PerformAsync(() => Client.ArchiveTaskTypeAsync(id));
+
+    private async Task RestoreTaskTypeAsync(int id) =>
+        await PerformAsync(() => Client.RestoreTaskTypeAsync(id));
+
+    private async Task ArchiveOutcomeAsync(int id) =>
+        await PerformAsync(() => Client.ArchiveOutcomeTypeAsync(id));
+
+    private async Task RestoreOutcomeAsync(int id) =>
+        await PerformAsync(() => Client.RestoreOutcomeTypeAsync(id));
+}

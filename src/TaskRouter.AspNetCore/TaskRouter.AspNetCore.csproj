@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>TaskRouter.AspNetCore</PackageId>
+    <Description>Ready-made minimal-API endpoints over every TaskRouter engine operation, with pluggable actor resolution and authorization.</Description>
+    <PackageTags>workflow;tasks;task-routing;approval;business-process;bpm;dotnet;aspnetcore;minimal-api</PackageTags>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TaskRouter.EntityFrameworkCore\TaskRouter.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+
+</Project>

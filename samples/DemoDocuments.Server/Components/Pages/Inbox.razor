@@ -1,0 +1,50 @@
+@page "/inbox"
+
+@inject IDbContextFactory<DemoDbContext> DbFactory
+
+<PageTitle>My tasks</PageTitle>
+
+<MudStack Spacing="4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="4">
+        <MudText Typo="Typo.h5" HtmlTag="h1">My tasks</MudText>
+        <MudBadge Content="_count" Color="Color.Info" Overlap="false" Visible="@(_count > 0)" />
+        <MudSpacer />
+        @* The demo has no authentication, so who you are is a picker. A real host
+           passes its signed-in user and shows no control at all. *@
+        <MudSelect T="string" @bind-Value="_actorId" Label="Acting as" Dense="true"
+                   Style="min-width: 260px;">
+            @foreach (var person in _people)
+            {
+                <MudSelectItem T="string" Value="@person.ActorId">@person.FullName</MudSelectItem>
+            }
+        </MudSelect>
+    </MudStack>
+
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Everything open and waiting on you, oldest first, including unclaimed work in your
+        section. Click a task to open the document and act on it.
+    </MudText>
+
+    <WorkflowInbox ActorId="@_actorId" OnCountChanged="@(c => _count = c)" />
+</MudStack>
+
+@code {
+    private List<PersonRow> _people = [];
+    private string _actorId = string.Empty;
+    private int _count;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _people = await db.People
+            .AsNoTracking()
+            .OrderBy(p => p.FullName)
+            .Select(p => new PersonRow(p.ActorId, p.FullName))
+            .ToListAsync();
+
+        _actorId = _people.FirstOrDefault()?.ActorId ?? "demo-user";
+    }
+
+    private sealed record PersonRow(string ActorId, string FullName);
+}

@@ -1,0 +1,478 @@
+@using TaskRouter.Core.Builder
+
+@inject IWorkflowBuilderClient Client
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:520px">
+
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudSelect T="string" @bind-Value="_edit.TaskTypeKey"
+                           Label="Task type" Variant="Variant.Outlined" Required="true"
+                           Class="flex-grow-1"
+                           HelperText="Task types are data, so the same type may appear more than once in a workflow.">
+                    @foreach (var t in _types)
+                    {
+                        <MudSelectItem T="string" Value="@t.Key">@t.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @*  Task types are rows, not an enum, so the set is the organisation's to
+                    extend. Adding one lived only in the seam until now, which meant a new
+                    kind of step needed a developer. *@
+                <MudTooltip Text="Add a task type">
+                    <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => _addingType = !_addingType)" />
+                </MudTooltip>
+            </MudStack>
+
+            @if (_addingType)
+            {
+                <MudPaper Class="pa-3" Elevation="0" Style="border: 1px solid var(--mud-palette-lines-default);">
+                    <MudStack Spacing="2">
+                        <MudText Typo="Typo.subtitle2">New task type</MudText>
+
+                        @*  One field, not two. The key is what the engine stores and what a
+                            host maps its own vocabulary against, but asking a person to
+                            invent one alongside a name is asking them to do a developer's
+                            job twice -- so it is derived and shown. *@
+                        <MudTextField T="string" @bind-Value="_newTypeName" @bind-Value:after="StateHasChanged"
+                                      Label="Name" Variant="Variant.Outlined" Immediate="true"
+                                      HelperText="@NewTypeHelper" />
+
+                        @if (_typeError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true">@_typeError</MudAlert>
+                        }
+
+                        <MudStack Row="true" Spacing="1">
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                       Disabled="@_savingType" OnClick="AddTaskTypeAsync">
+                                @(_savingType ? "Adding..." : "Add")
+                            </MudButton>
+                            <MudButton Size="Size.Small" OnClick="@(() => _addingType = false)">
+                                Cancel
+                            </MudButton>
+                        </MudStack>
+                    </MudStack>
+                </MudPaper>
+            }
+
+            <MudTextField @bind-Value="_edit.DisplayName"
+                          Label="Name in this workflow"
+                          Variant="Variant.Outlined"
+                          HelperText="Distinguishes two nodes of the same task type. Defaults to the type's name." />
+
+            <MudSelect T="string" @bind-Value="_edit.AssignmentRoleKey"
+                       Label="Assign to role" Variant="Variant.Outlined" Clearable="true"
+                       HelperText="Resolved by the host. Blank keeps the previous task's assignee.">
+                @foreach (var role in Roles)
+                {
+                    <MudSelectItem T="string" Value="@role">@role</MudSelectItem>
+                }
+            </MudSelect>
+
+            @* T="double?", matching the property. A MudNumericField bound to int? here
+               would reintroduce exactly the truncation the property exists to avoid, at
+               the UI layer instead of the model layer. *@
+            <MudNumericField T="double?" @bind-Value="_edit.ReminderLeadTimeDays"
+                             Label="Remind this many days before due"
+                             Variant="Variant.Outlined" Clearable="true"
+                             Min="0" Step="1"
+                             HelperText="Blank means this task never sends a reminder. Needs a due date from the host, and a Task Due Soon trigger to deliver it." />
+
+            <MudDivider />
+
+            <MudGrid>
+                <MudItem xs="6">
+                    <MudSwitch T="bool" @bind-Value="_edit.IsRequired" Label="Required" Color="Color.Primary" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudSwitch T="bool" @bind-Value="_edit.IsAdHoc" Label="Ad-hoc" Color="Color.Primary" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudSwitch T="bool" @bind-Value="_edit.IsBlocking" Label="Blocks its parent" Color="Color.Primary" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudSwitch T="bool" @bind-Value="_edit.IsTerminal" Label="Terminal" Color="Color.Primary" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudSwitch T="bool" Value="_edit.IsForkable"
+                               ValueChanged="@(v => { _edit.IsForkable = v; if (v) _edit.IsConvergencePoint = false; })"
+                               Label="Forkable" Color="Color.Primary" />
+                </MudItem>
+                <MudItem xs="6">
+                    <MudSwitch T="bool" Value="_edit.IsConvergencePoint"
+                               ValueChanged="@(v => { _edit.IsConvergencePoint = v; if (v) _edit.IsForkable = false; })"
+                               Label="Convergence point" Color="Color.Primary" />
+                </MudItem>
+            </MudGrid>
+
+            <MudDivider />
+
+            <MudText Typo="Typo.subtitle2">Outcomes</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                The choices a user picks from when completing this task. Each one needs a route
+                unless the task is terminal.
+            </MudText>
+
+            <MudTable Items="_edit.Outcomes" Dense="true" Elevation="0" Hover="true">
+                <HeaderContent>
+                    <MudTh>Key</MudTh>
+                    <MudTh>Label</MudTh>
+                    <MudTh Style="width:60px"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><code>@context.OutcomeKey</code></MudTd>
+                    <MudTd>@context.DisplayName</MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                       OnClick="@(() => _edit.Outcomes.Remove(context))" />
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                @*  A picker when the host has a fixed set of outcome keys, free text when it
+                    does not.
+
+                    The key is what routes match on and what a host translates into its own
+                    vocabulary, so a typo produces either a step that completes and stops the
+                    workflow dead, or a key the host cannot read -- which took out a whole
+                    screen in the first host. The label beside it stays free: it is display
+                    only, and nothing matches on it. *@
+                @*  Always a picker, never free text. An outcome key is what routes match
+                    on, so a typed one produces a step that completes and stops the workflow
+                    dead -- and two spellings of the same word produce two outcomes. The
+                    catalogue is the only way to add one, and the button beside this is the
+                    shortcut for doing it without leaving the workflow. *@
+                <MudSelect T="string" Value="_newOutcomeKey" ValueChanged="OnOutcomeKeyChosen"
+                           Label="Outcome" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           HelperText="@OutcomeKeyHelper">
+                    @foreach (var outcome in UnusedOutcomes)
+                    {
+                        <MudSelectItem T="string" Value="@outcome.Key">
+                            @outcome.DisplayName (@outcome.Key)
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudTextField @bind-Value="_newOutcomeLabel" Label="Label" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Placeholder="Approved" />
+                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddOutcome"
+                           Disabled="@string.IsNullOrWhiteSpace(_newOutcomeKey)">Add</MudButton>
+
+                @*  Adds to the catalogue, not to this task. The two are a step apart on
+                    purpose: an outcome nobody has defined is usually a typo, and the
+                    catalogue is what makes one spelling of it the only one. *@
+                <MudTooltip Text="Define a new outcome">
+                    <MudIconButton Icon="@Icons.Material.Filled.LibraryAdd" Size="Size.Small"
+                                   Color="Color.Primary"
+                                   OnClick="@(() => _addingOutcome = !_addingOutcome)" />
+                </MudTooltip>
+            </MudStack>
+
+            @if (_addingOutcome)
+            {
+                <MudPaper Class="pa-3" Elevation="0" Style="border: 1px solid var(--mud-palette-lines-default);">
+                    <MudStack Spacing="2">
+                        <MudText Typo="Typo.subtitle2">New outcome</MudText>
+
+                        <MudTextField T="string" @bind-Value="_newOutcomeName" @bind-Value:after="StateHasChanged"
+                                      Label="Name" Variant="Variant.Outlined" Immediate="true"
+                                      HelperText="@NewOutcomeHelper" />
+
+                        @if (_outcomeError is not null)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true">@_outcomeError</MudAlert>
+                        }
+
+                        <MudStack Row="true" Spacing="1">
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                       Disabled="@_savingOutcome" OnClick="AddOutcomeTypeAsync">
+                                @(_savingOutcome ? "Adding..." : "Add")
+                            </MudButton>
+                            <MudButton Size="Size.Small" OnClick="@(() => _addingOutcome = false)">
+                                Cancel
+                            </MudButton>
+                        </MudStack>
+
+                    </MudStack>
+                </MudPaper>
+            }
+
+            @if (UnknownOutcomeKeys.Count > 0)
+            {
+                @*  Authored before the host published its list, or by a host that has since
+                    narrowed it. Left alone rather than stripped -- runs completed on these
+                    keys and their routes still match -- but said out loud, because the host
+                    cannot read them. *@
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    @string.Join(", ", UnknownOutcomeKeys) @(UnknownOutcomeKeys.Count == 1 ? "is" : "are")
+                    not among the outcomes this host understands. Existing routes still work;
+                    anything reading this task's outcome will not recognise it.
+                </MudAlert>
+            }
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public TaskEditModel Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<TaskTypeOption> TaskTypes { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> Roles { get; set; } = [];
+
+    /// <summary>
+    /// The outcomes an author may give a task. Empty means nobody has defined any, and the
+    /// key field stays free text — which is what it was before there was a catalogue.
+    /// </summary>
+    [Parameter] public IReadOnlyList<OutcomeTypeOption> OutcomeTypes { get; set; } = [];
+
+    /// <summary>
+    /// The catalogue as this dialog currently sees it. Held locally because an outcome can
+    /// be added or retired from here, and a parameter cannot be added to.
+    /// </summary>
+    private List<OutcomeTypeOption> _outcomes = [];
+
+    private bool _addingOutcome;
+    private bool _savingOutcome;
+    private string _newOutcomeName = string.Empty;
+    private string? _outcomeError;
+
+    /// <summary>
+    /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
+    /// passes reference types by reference, so binding straight to the parameter wrote
+    /// changes into the caller's object the moment they were typed -- and closing with
+    /// Cancel left every one of them applied.
+    /// </summary>
+    private TaskEditModel _edit = new();
+
+    /// <summary>
+    /// The task types on offer, starting from what the builder loaded. Held locally because
+    /// one can be added from here, and a parameter cannot be added to.
+    /// </summary>
+    private List<TaskTypeOption> _types = [];
+
+    private bool _addingType;
+    private bool _savingType;
+    private string _newTypeName = string.Empty;
+    private string? _typeError;
+
+    protected override void OnInitialized()
+    {
+        _edit = Model.Clone();
+        _types = [.. TaskTypes];
+        _outcomes = [.. OutcomeTypes];
+    }
+
+    private string NewTypeHelper =>
+        KeyFor(_newTypeName) is { Length: > 0 } key
+            ? $"Stored as {key}"
+            : "A name for the kind of step, e.g. Safety Review.";
+
+    /// <summary>
+    /// The key a name is stored under: the name with everything but letters and digits
+    /// removed. Keys are what routes, host vocabularies and existing runs match on, so they
+    /// stay in the narrow shape the ones written by hand already use.
+    /// </summary>
+    private static string KeyFor(string name) =>
+        new([.. name.Where(char.IsLetterOrDigit)]);
+
+    /// <summary>
+    /// Creates the type and selects it. Saved immediately rather than with the workflow: a
+    /// task type is a row of its own that other workflows share, and holding it unsaved
+    /// would make a draft that cannot be discarded without losing it.
+    /// </summary>
+    private async Task AddTaskTypeAsync()
+    {
+        var name = _newTypeName.Trim();
+        var key = KeyFor(name);
+
+        if (key.Length == 0)
+        {
+            _typeError = "Give the task type a name with at least one letter or digit.";
+            return;
+        }
+
+        if (_types.Any(t => string.Equals(t.Key, key, StringComparison.OrdinalIgnoreCase)))
+        {
+            // The seam is idempotent and would hand back the existing row, which reads as
+            // success and silently keeps the old name. Saying so is better.
+            _typeError = $"There is already a task type stored as {key}.";
+            return;
+        }
+
+        _savingType = true;
+        _typeError = null;
+
+        try
+        {
+            var created = await Client.CreateTaskTypeAsync(key, name);
+
+            _types.Add(created);
+            _types = [.. _types.OrderBy(t => t.DisplayName, StringComparer.CurrentCulture)];
+
+            _edit.TaskTypeKey = created.Key;
+            _newTypeName = string.Empty;
+            _addingType = false;
+        }
+        catch (Exception exception)
+        {
+            _typeError = $"Could not add the task type. {exception.Message}";
+        }
+        finally
+        {
+            _savingType = false;
+        }
+    }
+
+    private string _newOutcomeKey = string.Empty;
+    private string _newOutcomeLabel = string.Empty;
+    private string? _error;
+
+    /// <summary>Catalogue entries not already on this task — adding one twice is not a choice.</summary>
+    private IReadOnlyList<OutcomeTypeOption> UnusedOutcomes =>
+        [.. _outcomes.Where(outcome =>
+            !_edit.Outcomes.Any(o => string.Equals(o.OutcomeKey, outcome.Key, StringComparison.OrdinalIgnoreCase)))];
+
+    /// <summary>
+    /// Keys on this task that the catalogue does not list — authored before the catalogue
+    /// existed, or retired since. Kept, and said out loud: the workflow still routes on them.
+    /// </summary>
+    private IReadOnlyList<string> UnknownOutcomeKeys =>
+        _outcomes.Count == 0
+            ? []
+            : [.. _edit.Outcomes
+                .Select(o => o.OutcomeKey)
+                .Where(key => !_outcomes.Any(o =>
+                    string.Equals(o.Key, key, StringComparison.OrdinalIgnoreCase)))];
+
+    private string OutcomeKeyHelper =>
+        _outcomes.Count == 0
+            ? "None defined yet — add one here, or manage them on the Types page."
+            : UnusedOutcomes.Count > 0
+                ? "Defined for this organisation."
+                : "All of them are already on this task.";
+
+    private string NewOutcomeHelper =>
+        KeyFor(_newOutcomeName) is { Length: > 0 } key
+            ? $"Stored as {key.ToLowerInvariant()}"
+            : "A way work can end, e.g. Needs More Information.";
+
+    /// <summary>
+    /// Adds an outcome to the organisation's catalogue and selects it here.
+    ///
+    /// <para>Saved immediately, like a task type: the catalogue is shared by every workflow,
+    /// and holding it unsaved would make a draft that cannot be discarded without losing it.
+    /// The key is lower-cased server-side — one spelling per outcome is the entire point.</para>
+    /// </summary>
+    private async Task AddOutcomeTypeAsync()
+    {
+        var name = _newOutcomeName.Trim();
+        var key = KeyFor(name).ToLowerInvariant();
+
+        if (key.Length == 0)
+        {
+            _outcomeError = "Give the outcome a name with at least one letter or digit.";
+            return;
+        }
+
+        if (_outcomes.Any(o => string.Equals(o.Key, key, StringComparison.OrdinalIgnoreCase)))
+        {
+            _outcomeError = $"There is already an outcome stored as {key}.";
+            return;
+        }
+
+        _savingOutcome = true;
+        _outcomeError = null;
+
+        try
+        {
+            var created = await Client.CreateOutcomeTypeAsync(key, name);
+
+            _outcomes.Add(created);
+            _outcomes = [.. _outcomes.OrderBy(o => o.DisplayName, StringComparer.CurrentCulture)];
+
+            OnOutcomeKeyChosen(created.Key);
+            _newOutcomeName = string.Empty;
+            _addingOutcome = false;
+        }
+        catch (Exception exception)
+        {
+            _outcomeError = $"Could not add the outcome. {exception.Message}";
+        }
+        finally
+        {
+            _savingOutcome = false;
+        }
+    }
+
+
+
+    /// <summary>
+    /// Fills the label in from the key when nobody has typed one. Saves the common case,
+    /// which is a label that is the key made readable.
+    /// </summary>
+    private void OnOutcomeKeyChosen(string key)
+    {
+        _newOutcomeKey = key;
+
+        if (string.IsNullOrWhiteSpace(_newOutcomeLabel))
+        {
+            _newOutcomeLabel = Humanise(key);
+        }
+    }
+
+    /// <summary>"sent-reply-required" reads badly on a button. "Sent Reply Required" does.</summary>
+    private static string Humanise(string key) =>
+        string.Join(' ', key
+            .Split(['-', '_', ' '], StringSplitOptions.RemoveEmptyEntries)
+            .Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
+
+    private void AddOutcome()
+    {
+        var key = _newOutcomeKey.Trim();
+
+        if (_edit.Outcomes.Any(o => string.Equals(o.OutcomeKey, key, StringComparison.OrdinalIgnoreCase)))
+        {
+            _error = $"Outcome '{key}' already exists on this task.";
+            return;
+        }
+
+        _edit.Outcomes.Add(new OutcomeEditModel
+        {
+            OutcomeKey = key,
+            DisplayName = string.IsNullOrWhiteSpace(_newOutcomeLabel) ? key : _newOutcomeLabel.Trim(),
+            Order = _edit.Outcomes.Count + 1
+        });
+
+        _newOutcomeKey = string.Empty;
+        _newOutcomeLabel = string.Empty;
+        _error = null;
+    }
+
+    private void Save()
+    {
+        if (string.IsNullOrWhiteSpace(_edit.TaskTypeKey))
+        {
+            _error = "A task type is required.";
+            return;
+        }
+
+        Model.CopyFrom(_edit);
+        Dialog.Close(DialogResult.Ok(Model));
+    }
+}

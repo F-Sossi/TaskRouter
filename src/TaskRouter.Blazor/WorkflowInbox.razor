@@ -1,0 +1,310 @@
+@implements IDisposable
+
+@inject IWorkflowInboxClient Client
+
+@*
+    What is waiting on one person, and where to go and do it.
+
+    The third component of the set, after the builder and the runner. It shows one row
+    per task rather than per document so it can be sorted by age: the thing that has
+    waited longest is the thing to do.
+
+    Rows navigate through a plain MudLink on the host-built SubjectUrl, so this needs no
+    NavigationManager and no idea what a document is.
+*@
+
+<MudStack Spacing="3">
+    @*  Which sections' unclaimed work to include, starting on the person's own.
+
+        Work handed to a section by a sub-workflow waits there unclaimed, so an inbox fixed
+        to the viewer's own sections could not show somebody covering for another section
+        what was waiting there. Clearing the picker falls back to their own sections, which
+        is what an untouched inbox has always shown. *@
+    @if (_units.Count > 1)
+    {
+        <MudSelect T="string" MultiSelection="true" Dense="true" Clearable="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Label="Sections"
+                   SelectedValues="_selectedUnits" SelectedValuesChanged="OnUnitsChanged"
+                   MultiSelectionTextFunc="@(selected => SelectionLabel(selected))"
+                   Style="max-width: 420px;">
+            @foreach (var unit in _units)
+            {
+                <MudSelectItem T="string" Value="@unit.Key">
+                    @unit.DisplayName@(unit.IsMine ? " (mine)" : "")
+                </MudSelectItem>
+            }
+        </MudSelect>
+    }
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true"
+                  ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">
+            @_error
+        </MudAlert>
+    }
+
+    @if (_loading)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (_items.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Dense="true">
+            @(IsScopedElsewhere
+                ? "Nothing is waiting in the sections you picked."
+                : "Nothing is waiting on you.")
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_items" Dense="true" Hover="true" Elevation="1"
+                  AllowUnsorted="false" T="InboxItem">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel SortBy="@(new Func<InboxItem, object?>(i => i.TaskLabel))" T="InboxItem">Task</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="@(new Func<InboxItem, object?>(i => i.SubjectLabel))" T="InboxItem">Document</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel SortBy="@(new Func<InboxItem, object?>(i => i.BranchLabel ?? i.BranchKey))" T="InboxItem">Section</MudTableSortLabel></MudTh>
+                @* Oldest first by default: sorting on Created ascending puts the
+                   longest wait at the top, which is the order to work in.
+
+                   SortBy tiebreaks on TaskId, and must not sort on Created alone. Every
+                   branch of a fork is stamped with one DateTime.UtcNow, so Created is
+                   not a total order -- the engine query adds .ThenBy(t => t.Id) for
+                   exactly this reason (see WorkflowEngine.Inbox.cs). A client-side
+                   re-sort on Created alone throws that tiebreak away and reintroduces
+                   the reshuffle-between-refreshes the engine went out of its way to
+                   prevent. Found in the Tasks 3-4 review, 2026-08-20. *@
+                <MudTh><MudTableSortLabel SortBy="@(new Func<InboxItem, object?>(i => (i.Created, i.TaskId)))" T="InboxItem"
+                                          InitialDirection="SortDirection.Ascending">Waiting</MudTableSortLabel></MudTh>
+                @* Sortable, but not the default sort. Ordering overdue work to the top
+                   sounds right and is not: the list would reorder as deadlines pass, and
+                   the engine's stable (Created, TaskId) ordering exists precisely to stop
+                   rows moving between refreshes. Anyone who wants that view clicks this.
+
+                   Nulls sort as DateTime.MaxValue so "no deadline" lands at the far end
+                   rather than at the top, where an ascending sort on a nullable would
+                   otherwise put every undated row ahead of the most overdue one. *@
+                <MudTh><MudTableSortLabel SortBy="@(new Func<InboxItem, object?>(i => (i.DueDate ?? DateTime.MaxValue, i.TaskId)))" T="InboxItem">Due</MudTableSortLabel></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Task">
+                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                        <MudLink Href="@context.SubjectUrl" Underline="Underline.Hover"
+                                 Disabled="@string.IsNullOrEmpty(context.SubjectUrl)">
+                            @context.TaskLabel
+                        </MudLink>
+                        @if (context.IsUnclaimed)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                                     Variant="Variant.Outlined"
+                                     title="In your section, with nobody assigned. Open the document and reassign it to take it.">
+                                Unclaimed
+                            </MudChip>
+                        }
+                        @if (context.IsBlocked)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default"
+                                     Variant="Variant.Outlined"
+                                     title="Waiting on a sub-workflow. Open it to see what.">
+                                Blocked
+                            </MudChip>
+                        }
+                    </MudStack>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@context.WorkflowName</MudText>
+                </MudTd>
+                <MudTd DataLabel="Document">
+                    <MudText Typo="Typo.body2">@context.SubjectLabel</MudText>
+                    @if (!string.IsNullOrWhiteSpace(context.SubjectSubtitle))
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@context.SubjectSubtitle</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Section">@(context.BranchLabel ?? context.BranchKey ?? "—")</MudTd>
+                <MudTd DataLabel="Waiting">@Waited(context.Created)</MudTd>
+                <MudTd DataLabel="Due">
+                    <MudText Typo="Typo.body2"
+                             Color="@(context.DueDate is { } due && due < DateTime.UtcNow ? Color.Error : Color.Default)"
+                             Class="@(context.DueDate is null && context.OverdueFiredAt is null ? "mud-text-secondary" : "")">
+                        @DueCell(context.DueDate, context.OverdueFiredAt)
+                    </MudText>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudStack>
+
+@code {
+    /// <summary>Whose inbox this is. A host with authentication passes the signed-in
+    /// user; the demo passes a picker's selection.</summary>
+    [Parameter, EditorRequired] public string ActorId { get; set; } = string.Empty;
+
+    /// <summary>Raised with the row count after every load, so a host can badge a tab.</summary>
+    [Parameter] public EventCallback<int> OnCountChanged { get; set; }
+
+    private IReadOnlyList<InboxItem> _items = [];
+    private string? _error;
+    private bool _loading = true;
+    private string _loadedFor = string.Empty;
+
+    /// <summary>The sections the inbox may be pointed at, the viewer's own flagged.</summary>
+    private IReadOnlyList<InboxOrgUnit> _units = [];
+
+    /// <summary>
+    /// What the picker has selected. Starts on the viewer's own, and an empty selection is
+    /// the same request as no picker at all — the seam reads null as "the actor's own".
+    /// </summary>
+    private IReadOnlyCollection<string> _selectedUnits = [];
+
+    /// <summary>
+    /// Whether the viewer is looking somewhere other than their own sections. Only used to
+    /// word the empty state: "nothing is waiting on you" is a false statement about a
+    /// section that is not yours.
+    /// </summary>
+    private bool IsScopedElsewhere =>
+        _selectedUnits.Count > 0
+        && !_selectedUnits.All(key => _units.Any(u => u.Key == key && u.IsMine));
+
+    private string SelectionLabel(IReadOnlyCollection<string>? selected) =>
+        selected is null or { Count: 0 }
+            ? "My sections"
+            : string.Join(", ", selected.Select(key =>
+                _units.FirstOrDefault(u => u.Key == key)?.DisplayName ?? key));
+
+    private async Task OnUnitsChanged(IReadOnlyCollection<string> selected)
+    {
+        _selectedUnits = selected;
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// One load at a time — the same hazard the runner has. A parent that resolves the
+    /// signed-in actor asynchronously re-renders when it finishes, which fires
+    /// OnParametersSetAsync again while the first load is still awaiting; two concurrent
+    /// loads against an EF DbContext throw, because it permits one operation at a time.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedFor == ActorId)
+        {
+            return;
+        }
+
+        _loadedFor = ActorId;
+        await LoadAsync();
+    }
+
+    /// <summary>Re-polls. Public so a host can refresh after something elsewhere on the
+    /// page changes a run.</summary>
+    public async Task RefreshAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ActorId))
+        {
+            _items = [];
+            _loading = false;
+            return;
+        }
+
+        await _gate.WaitAsync();
+        try
+        {
+            _loading = true;
+            _error = null;
+
+            if (_units.Count == 0)
+            {
+                // Once per actor. The list is an org chart, which does not change while
+                // somebody reads their inbox, and this runs after every refresh.
+                _units = await Client.GetOrgUnitsAsync(ActorId);
+                _selectedUnits = [.. _units.Where(u => u.IsMine).Select(u => u.Key)];
+            }
+
+            // Null rather than an empty list when nothing is picked: the seam reads null as
+            // "the actor's own units" and an empty list as "no units at all", which would
+            // hide every unclaimed row.
+            _items = await Client.GetInboxAsync(
+                ActorId, _selectedUnits.Count == 0 ? null : [.. _selectedUnits]);
+        }
+        catch (Exception ex)
+        {
+            // Unlike the runner, this seam's read returns a bare list rather than a
+            // Result, so a failure arrives as an exception and has nowhere else to go.
+            _error = ex.Message;
+            _items = [];
+        }
+        finally
+        {
+            _loading = false;
+            _gate.Release();
+        }
+
+        await OnCountChanged.InvokeAsync(_items.Count);
+    }
+
+    /// <summary>How long this has been waiting. Created is UTC, so the comparison must
+    /// be against UtcNow — DateTime.Now compiles and is wrong by the host's offset.</summary>
+    private static string Waited(DateTime created)
+    {
+        var age = DateTime.UtcNow - created;
+
+        return age.TotalDays >= 1 ? $"{(int)age.TotalDays}d"
+            : age.TotalHours >= 1 ? $"{(int)age.TotalHours}h"
+            : $"{Math.Max(1, (int)age.TotalMinutes)}m";
+    }
+
+    /// <summary>
+    /// How long until this is due, or how long it has been overdue. DueDate is UTC, so
+    /// the comparison must be against UtcNow — DateTime.Now compiles and is wrong by the
+    /// host's offset. Same arithmetic as <see cref="Waited"/>, opposite sign.
+    /// </summary>
+    private static string DueIn(DateTime due)
+    {
+        var remaining = due - DateTime.UtcNow;
+
+        if (remaining < TimeSpan.Zero)
+        {
+            var over = remaining.Negate();
+
+            return over.TotalDays >= 1 ? $"{(int)over.TotalDays}d overdue"
+                : over.TotalHours >= 1 ? $"{(int)over.TotalHours}h overdue"
+                : "overdue";
+        }
+
+        return remaining.TotalDays >= 1 ? $"due in {(int)remaining.TotalDays}d"
+            : remaining.TotalHours >= 1 ? $"due in {(int)remaining.TotalHours}h"
+            : $"due in {Math.Max(1, (int)remaining.TotalMinutes)}m";
+    }
+
+    /// <summary>
+    /// The Due cell's text: how long until due or how long overdue, and whether an
+    /// escalation was raised.
+    ///
+    /// One helper rather than a suffix appended in markup, because the two values can
+    /// disagree and only something seeing both can decide what to say.
+    /// <c>OverdueFiredAt</c> is a one-way stamp while the sweep keeps repairing
+    /// <c>DueDate</c> underneath it — a deadline extended after an escalation fired
+    /// leaves a task no longer late but already chased, and a deadline removed entirely
+    /// leaves one with no date at all. Rendering the marker only inside the has-a-date
+    /// branch lost it in that second case.
+    ///
+    /// The marker is deliberately independent of whether the task is currently late: it
+    /// is history, not status. Once somebody has been told, that stays true, and a
+    /// triage list needs to know it whatever the date has since done.
+    /// </summary>
+    private static string DueCell(DateTime? due, DateTime? escalatedAt)
+    {
+        var escalated = escalatedAt is not null;
+
+        if (due is not { } d)
+        {
+            return escalated ? "escalated" : "—";
+        }
+
+        return escalated ? $"{DueIn(d)} · escalated" : DueIn(d);
+    }
+
+    public void Dispose() => _gate.Dispose();
+}

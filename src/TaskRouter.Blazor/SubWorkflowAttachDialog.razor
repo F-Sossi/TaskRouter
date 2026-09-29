@@ -1,0 +1,122 @@
+@using TaskRouter.Core.Builder
+
+@*  Declares where a reusable sub-workflow may hang in this version. Attaching is a
+    configuration decision, not a runtime one: the runner only offers what was
+    attached here, so this dialog is the only way in short of SQL. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:460px">
+
+            <MudSelect T="int" @bind-Value="_edit.SubWorkflowDefinitionId"
+                       Label="Sub-workflow" Variant="Variant.Outlined" Required="true">
+                @foreach (var option in Available)
+                {
+                    <MudSelectItem T="int" Value="@option.DefinitionId">
+                        @option.Name @(option.HasPublishedVersion ? "" : "(no published version)")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            @* A draft can be attached; only starting it fails. Warned rather than
+               refused, so a pair of workflows can be built in either order. *@
+            @if (Selected is { HasPublishedVersion: false })
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    This sub-workflow has no published version, so starting it will fail
+                    until one is published.
+                </MudAlert>
+            }
+
+            <MudSelect T="Guid?" @bind-Value="_edit.TaskLocalId"
+                       Label="Available on" Variant="Variant.Outlined"
+                       HelperText="Any task means tasks added later get it too.">
+                <MudSelectItem T="Guid?" Value="@((Guid?)null)">Any task</MudSelectItem>
+                @foreach (var task in Tasks)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)task.LocalId)">@task.Label</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSwitch T="bool" @bind-Value="_edit.IsBlocking" Color="Color.Warning"
+                       Label="Blocks the parent task" />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                The parent cannot be completed until this is completed or cancelled.
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_edit.IsAutomatic" Color="Color.Info"
+                       Label="Start automatically" />
+
+            <MudSwitch T="bool" @bind-Value="_edit.AllowMultiple" Color="Color.Info"
+                       Label="Allow several at once" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public SubWorkflowAttachmentEditModel Model { get; set; } = new();
+
+    /// <summary>Definitions flagged as reusable sub-workflows.</summary>
+    [Parameter] public IReadOnlyList<SubWorkflowDefinitionOption> Available { get; set; } = [];
+
+    /// <summary>Tasks an attachment may be scoped to. Ad-hoc tasks are excluded by the caller.</summary>
+    [Parameter] public IReadOnlyList<TaskEditModel> Tasks { get; set; } = [];
+
+    /// <summary>
+    /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
+    /// passes reference types by reference, so binding straight to the parameter would
+    /// write changes into the caller's object the moment they were typed, and closing
+    /// with Cancel would leave every one of them applied.
+    /// </summary>
+    private SubWorkflowAttachmentEditModel _edit = new();
+
+    private string? _error;
+
+    private SubWorkflowDefinitionOption? Selected =>
+        Available.FirstOrDefault(o => o.DefinitionId == _edit.SubWorkflowDefinitionId);
+
+    protected override void OnInitialized()
+    {
+        _edit = Model.Clone();
+
+        // A new attachment arrives with no definition chosen. Preselecting the first
+        // means the select shows something rather than an empty box that reads as broken.
+        if (_edit.SubWorkflowDefinitionId == 0)
+        {
+            _edit.SubWorkflowDefinitionId = Available.FirstOrDefault()?.DefinitionId ?? 0;
+        }
+    }
+
+    private void Save()
+    {
+        if (_edit.SubWorkflowDefinitionId == 0)
+        {
+            _error = "Choose a sub-workflow.";
+            return;
+        }
+
+        // The engine cannot interpret automatic + any task: it would start an instance
+        // on every task in the run. Refused here so it is not a validation error later.
+        if (_edit.IsAutomatic && _edit.TaskLocalId is null)
+        {
+            _error = "An automatic sub-workflow must be attached to a specific task.";
+            return;
+        }
+
+        Model.CopyFrom(_edit);
+        Dialog.Close(DialogResult.Ok(Model));
+    }
+}

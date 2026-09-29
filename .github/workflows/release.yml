@@ -1,0 +1,73 @@
+name: release
+
+# Publishing is driven by a tag, not by a push to main: the version lives in
+# Directory.Build.props, and tagging is the moment somebody decides that version is the
+# one. A tag also gives the release something to point at afterwards.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: ${{ secrets.TEST_SA_PASSWORD || 'Str0ng!Passw0rd' }}
+        ports:
+          - 1433:1433
+
+    env:
+      SA_PASSWORD: ${{ secrets.TEST_SA_PASSWORD || 'Str0ng!Passw0rd' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Wait for SQL Server
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec "$(docker ps -q --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest)" \
+                 /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" > /dev/null 2>&1; then
+              echo "SQL Server is accepting logins."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "SQL Server never became reachable." >&2
+          exit 1
+
+      # The suite runs again here rather than trusting the build that ran on the commit.
+      # A tag can be moved, and publishing is the one step that cannot be undone.
+      - name: Build
+        run: dotnet build TaskRouter.slnx --configuration Release --no-incremental
+
+      - name: Test
+        run: dotnet test TaskRouter.slnx --configuration Release --no-build
+
+      - name: Pack
+        run: dotnet pack TaskRouter.slnx --configuration Release --no-build --output ./artifacts
+
+      # --skip-duplicate so a re-run after a partial failure finishes the job instead of
+      # failing on the packages that already went up. Four packages push separately and
+      # there is no transaction across them.
+      - name: Push to nuget.org
+        run: |
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ./artifacts/*.*nupkg
+          if-no-files-found: error

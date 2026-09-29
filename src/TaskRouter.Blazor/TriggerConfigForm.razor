@@ -1,0 +1,167 @@
+@using TaskRouter.Core.Abstractions
+@using TaskRouter.Core.Model
+
+@*
+    Renders a configuration form from a trigger's declared parameters.
+
+    This is what makes the trigger system open: the builder has no knowledge of any
+    specific trigger, so a trigger written years from now gets a working editor for
+    free, provided it declares its parameters. A trigger needing something this cannot
+    express supplies its own component via TriggerDescriptor.CustomEditorComponent.
+*@
+
+@if (Descriptor is null)
+{
+    <MudAlert Severity="Severity.Info" Dense="true">
+        Choose a trigger action to configure it.
+    </MudAlert>
+}
+else if (Descriptor.CustomEditorComponent is not null)
+{
+    <DynamicComponent Type="Descriptor.CustomEditorComponent"
+                      Parameters="@(new Dictionary<string, object?> { ["Configuration"] = Configuration })" />
+}
+else if (Descriptor.Parameters.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Dense="true">
+        This trigger needs no configuration.
+    </MudAlert>
+}
+else
+{
+    <MudStack Spacing="3">
+        @foreach (var p in Descriptor.Parameters)
+        {
+            @switch (p.Kind)
+            {
+                case TriggerParameterKind.Boolean:
+                    <MudSwitch T="bool"
+                               Value="@GetBool(p)"
+                               ValueChanged="@(v => Set(p, v.ToString()))"
+                               Label="@Label(p)"
+                               Color="Color.Primary" />
+                    break;
+
+                case TriggerParameterKind.Integer:
+                    <MudNumericField T="int?"
+                                     Value="@GetInt(p)"
+                                     ValueChanged="@(v => Set(p, v?.ToString()))"
+                                     Label="@Label(p)"
+                                     HelperText="@p.HelpText"
+                                     Required="p.Required"
+                                     Variant="Variant.Outlined" />
+                    break;
+
+                case TriggerParameterKind.Decimal:
+                    <MudNumericField T="decimal?"
+                                     Value="@GetDecimal(p)"
+                                     ValueChanged="@(v => Set(p, v?.ToString()))"
+                                     Label="@Label(p)"
+                                     HelperText="@p.HelpText"
+                                     Required="p.Required"
+                                     Variant="Variant.Outlined" />
+                    break;
+
+                case TriggerParameterKind.Choice:
+                    <MudSelect T="string"
+                               Value="@Get(p)"
+                               ValueChanged="@(v => Set(p, v))"
+                               Label="@Label(p)"
+                               HelperText="@p.HelpText"
+                               Required="p.Required"
+                               Variant="Variant.Outlined">
+                        @foreach (var choice in p.Choices ?? [])
+                        {
+                            <MudSelectItem T="string" Value="@choice">@choice</MudSelectItem>
+                        }
+                    </MudSelect>
+                    break;
+
+                case TriggerParameterKind.MultilineText:
+                case TriggerParameterKind.Template:
+                    <MudTextField T="string"
+                                  Value="@Get(p)"
+                                  ValueChanged="@(v => Set(p, v))"
+                                  Label="@Label(p)"
+                                  HelperText="@(p.HelpText ?? TemplateHint)"
+                                  Required="p.Required"
+                                  Lines="4"
+                                  Variant="Variant.Outlined" />
+                    break;
+
+                case TriggerParameterKind.TaskDefinitionRef:
+                    <MudSelect T="string"
+                               Value="@Get(p)"
+                               ValueChanged="@(v => Set(p, v))"
+                               Label="@Label(p)"
+                               HelperText="@p.HelpText"
+                               Required="p.Required"
+                               Variant="Variant.Outlined">
+                        @foreach (var task in TaskOptions)
+                        {
+                            <MudSelectItem T="string" Value="@task.Key">@task.Value</MudSelectItem>
+                        }
+                    </MudSelect>
+                    break;
+
+                case TriggerParameterKind.RoleRef:
+                    <MudSelect T="string"
+                               Value="@Get(p)"
+                               ValueChanged="@(v => Set(p, v))"
+                               Label="@Label(p)"
+                               HelperText="@p.HelpText"
+                               Required="p.Required"
+                               Variant="Variant.Outlined">
+                        @foreach (var role in RoleOptions)
+                        {
+                            <MudSelectItem T="string" Value="@role">@role</MudSelectItem>
+                        }
+                    </MudSelect>
+                    break;
+
+                default:
+                    <MudTextField T="string"
+                                  Value="@Get(p)"
+                                  ValueChanged="@(v => Set(p, v))"
+                                  Label="@Label(p)"
+                                  HelperText="@p.HelpText"
+                                  Required="p.Required"
+                                  InputType="@(p.Kind == TriggerParameterKind.Url ? InputType.Url : InputType.Text)"
+                                  Variant="Variant.Outlined" />
+                    break;
+            }
+        }
+    </MudStack>
+}
+
+@code {
+    private const string TemplateHint =
+        "Tokens: {task.id} {task.name} {task.type} {task.outcome} {task.branch} {task.assignee} {event}";
+
+    [Parameter] public TriggerDescriptor? Descriptor { get; set; }
+    [Parameter] public Dictionary<string, string?> Configuration { get; set; } = [];
+    [Parameter] public EventCallback<Dictionary<string, string?>> ConfigurationChanged { get; set; }
+
+    /// <summary>Task label by local id, for TaskDefinitionRef parameters.</summary>
+    [Parameter] public IReadOnlyDictionary<string, string> TaskOptions { get; set; }
+        = new Dictionary<string, string>();
+
+    [Parameter] public IReadOnlyList<string> RoleOptions { get; set; } = [];
+
+    private static string Label(TriggerParameter p) => p.Required ? $"{p.Label} *" : p.Label;
+
+    private string? Get(TriggerParameter p) =>
+        Configuration.TryGetValue(p.Name, out var v) && v is not null ? v : p.DefaultValue;
+
+    private bool GetBool(TriggerParameter p) => bool.TryParse(Get(p), out var v) && v;
+
+    private int? GetInt(TriggerParameter p) => int.TryParse(Get(p), out var v) ? v : null;
+
+    private decimal? GetDecimal(TriggerParameter p) => decimal.TryParse(Get(p), out var v) ? v : null;
+
+    private async Task Set(TriggerParameter p, string? value)
+    {
+        Configuration[p.Name] = value;
+        await ConfigurationChanged.InvokeAsync(Configuration);
+    }
+}

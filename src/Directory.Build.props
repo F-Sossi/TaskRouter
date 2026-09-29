@@ -1,0 +1,45 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- The four shipping packages. The XML docs carry most of this codebase's
+       reasoning, so they ship with it. -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>workflow;tasks;task-routing;approval;business-process;bpm;dotnet</PackageTags>
+
+    <!-- CS1591/CS1573: missing XML comments on public members. The docs that exist are
+         the point of GenerateDocumentationFile and they ship; what is not yet written
+         should not turn the repo's 0-warning build into 700 lines of noise. Drop these
+         once the public surface is fully documented. -->
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
+
+  <!-- Debugging into the package.
+
+       SourceLink is in the SDK from .NET 8, so there is no package reference to add: these
+       properties are the whole of it. PublishRepositoryUrl puts the commit in the assembly
+       so a debugger can fetch the exact source; EmbedUntrackedSources covers generated
+       files, which would otherwise be the one thing a stepping user cannot see. -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+
+    <!-- A separate .snupkg rather than embedding the PDB: symbols are a large fraction of
+         the package and most consumers never need them. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- Deterministic paths, but only on the build server. Locally this would replace the
+         real source paths with placeholders and break stepping into a project reference,
+         which is exactly what a developer wants working. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

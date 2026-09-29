@@ -1,0 +1,36 @@
+## .NET build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+*.userprefs
+
+## Test / coverage
+[Tt]est[Rr]esults/
+coverage/
+*.trx
+*.coverage
+*.opencover.xml
+
+## IDE
+.vs/
+.idea/
+.vscode/
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+
+## Secrets and local config
+appsettings.Local.json
+appsettings.Development.local.json
+*.env
+.env
+
+## OS
+.DS_Store
+Thumbs.db

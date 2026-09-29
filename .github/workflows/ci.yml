@@ -1,0 +1,77 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # The test suite is integration-first by design: it runs against a real SQL Server
+    # rather than an in-memory provider, because the things most worth testing here --
+    # transactions, unique indexes, cascade behaviour, collation -- are exactly the things
+    # an in-memory provider does not have. So CI needs a database.
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: ${{ secrets.TEST_SA_PASSWORD || 'Str0ng!Passw0rd' }}
+        ports:
+          - 1433:1433
+
+    env:
+      SA_PASSWORD: ${{ secrets.TEST_SA_PASSWORD || 'Str0ng!Passw0rd' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SourceLink embeds the commit, and a shallow clone with no history is enough
+          # for that -- but fetch-depth 0 keeps `git describe` and friends working if a
+          # future step wants them.
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # The service container reports healthy before SQL Server is accepting logins, so
+      # the first test run would otherwise race it. Poll rather than sleep: a fixed wait
+      # is either too short on a slow runner or wasted time on a fast one.
+      - name: Wait for SQL Server
+        run: |
+          for i in $(seq 1 60); do
+            if /opt/mssql-tools18/bin/sqlcmd -S localhost,1433 -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" > /dev/null 2>&1 \
+               || docker exec "$(docker ps -q --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest)" \
+                  /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" > /dev/null 2>&1; then
+              echo "SQL Server is accepting logins."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "SQL Server never became reachable." >&2
+          exit 1
+
+      - name: Restore
+        run: dotnet restore TaskRouter.slnx
+
+      # --no-incremental because an incremental build can report zero warnings for a
+      # project it did not recompile, which has masked a real warning in this repo before.
+      - name: Build
+        run: dotnet build TaskRouter.slnx --configuration Release --no-restore --no-incremental
+
+      - name: Test
+        run: dotnet test TaskRouter.slnx --configuration Release --no-build --verbosity normal
+
+      - name: Pack
+        run: dotnet pack TaskRouter.slnx --configuration Release --no-build --output ./artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ./artifacts/*.*nupkg
+          if-no-files-found: error

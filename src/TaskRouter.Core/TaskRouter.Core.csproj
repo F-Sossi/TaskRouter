@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>TaskRouter.Core</PackageId>
+    <Description>Abstractions and domain model for TaskRouter, a task-based workflow engine for .NET: workflow definitions, tasks, routes, triggers and the validator. No EF Core, no ASP.NET, no UI.</Description>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

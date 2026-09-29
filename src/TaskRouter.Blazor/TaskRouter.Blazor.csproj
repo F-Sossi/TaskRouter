@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>TaskRouter.Blazor</PackageId>
+    <Description>The TaskRouter workflow builder and task runner as a Razor Class Library, built on MudBlazor: author workflows as data, drive live runs, and render the diagram.</Description>
+    <PackageTags>workflow;tasks;task-routing;approval;business-process;bpm;dotnet;blazor;mudblazor;razor-class-library</PackageTags>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Kept level with every other TaskRouter package at 10.0.10 rather than tracking the
+      newest patch. A PackageReference version is a floor, and a library that floors higher
+      than it needs to forces every consumer up with it: 10.0.11 dragged
+      Microsoft.Extensions.Configuration.Abstractions above what the first host was on, and
+      failed its restore outright.
+    -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
+    <PackageReference Include="MudBlazor" Version="9.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TaskRouter.Core\TaskRouter.Core.csproj" />
+  </ItemGroup>
+
+</Project>

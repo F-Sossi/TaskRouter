@@ -1,0 +1,116 @@
+@using TaskRouter.Core.Model
+@using TaskRouter.Core.Runner
+
+@*
+    Rejecting some branches at a convergence point, and accepting the rest.
+
+    This is the operation the whole fork design exists for. Rejecting the fork wholesale
+    would discard work that was fine; re-forking everything would make people redo it.
+    So the reviewer names the branches that were the problem, and only those come back --
+    the accepted ones keep their outcome and are not touched.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:460px;">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Completing <b>@TaskLabel</b> as <b>@OutcomeDisplayName</b>. Tick the branches
+                to send back for rework; the rest are accepted as they stand.
+            </MudText>
+
+            @if (Branches.Count == 0)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    This fork recorded no branches.
+                </MudAlert>
+            }
+            else
+            {
+                <MudPaper Outlined="true" Class="pa-2">
+                    @foreach (var branch in Branches)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudCheckBox T="bool"
+                                         Value="@_rejected.Contains(branch.BranchKey)"
+                                         ValueChanged="@(v => Toggle(branch.BranchKey, v))"
+                                         Color="Color.Error" Dense="true" />
+
+                            <MudText Typo="Typo.body2"><b>@branch.BranchKey</b></MudText>
+
+                            @if (branch.OutcomeKey is not null)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                    @branch.OutcomeKey
+                                </MudChip>
+                            }
+
+                            <MudSpacer />
+
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @(branch.AssignedToDisplayName ?? branch.AssignedToActorId ?? "unassigned")
+                            </MudText>
+                        </MudStack>
+
+                        @if (!string.IsNullOrWhiteSpace(branch.Notes))
+                        {
+                            <MudText Typo="Typo.caption" Class="ml-8 mud-text-secondary">
+                                @branch.Notes
+                            </MudText>
+                        }
+                    }
+                </MudPaper>
+            }
+
+            <MudTextField T="string" @bind-Value="_notes" Label="Notes" Lines="2"
+                          Variant="Variant.Outlined" />
+
+            @if (_rejected.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    Nothing ticked: the task completes and every branch is accepted.
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    @_rejected.Count of @Branches.Count branch(es) go back for rework and
+                    will converge here again. The rest are accepted.
+                </MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="@(_rejected.Count == 0 ? Color.Primary : Color.Error)"
+                   Variant="Variant.Filled" OnClick="Save">
+            @(_rejected.Count == 0 ? "Complete" : "Send back")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string TaskLabel { get; set; } = string.Empty;
+    [Parameter] public string OutcomeKey { get; set; } = string.Empty;
+    [Parameter] public string OutcomeDisplayName { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<ForkBranchView> Branches { get; set; } = [];
+
+    private readonly HashSet<string> _rejected = new(StringComparer.Ordinal);
+    private string? _notes;
+
+    private void Toggle(string branchKey, bool rejected)
+    {
+        if (rejected)
+        {
+            _rejected.Add(branchKey);
+        }
+        else
+        {
+            _rejected.Remove(branchKey);
+        }
+    }
+
+    private void Save() => Dialog.Close(DialogResult.Ok(
+        new WorkflowRunner.SelectiveRejectionRequest(OutcomeKey, [.. _rejected], _notes)));
+}

@@ -1,0 +1,178 @@
+@using TaskRouter.Core.Runner
+
+@inject IWorkflowRunnerClient Runner
+
+@*
+    Try the workflow you just built, without publishing it.
+
+    Runs started here are marked IsTest on the run itself, so a host can keep them out
+    of inboxes, counts and reports with one predicate. They are started against a
+    version id rather than a definition id, which is why a draft can be tested at all --
+    the ordinary entry point only ever starts runs on the latest published version.
+*@
+
+<MudPaper Class="pa-3" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIcon Icon="@Icons.Material.Filled.PlayCircleOutline" Size="Size.Small" />
+        <MudText Typo="Typo.h6">Try it</MudText>
+
+        @if (_subjectId is not null)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning">test run</MudChip>
+        }
+
+        <MudSpacer />
+
+        @if (_subjectId is null)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.PlayArrow"
+                       Disabled="@(_busy || VersionId == 0)"
+                       OnClick="Start">Start a test run</MudButton>
+        }
+        else
+        {
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh"
+                       Disabled="@_busy" OnClick="Restart">Start again</MudButton>
+            <MudButton Size="Size.Small" Color="Color.Error"
+                       StartIcon="@Icons.Material.Filled.DeleteSweep"
+                       Disabled="@_busy" OnClick="Discard">Discard</MudButton>
+        }
+
+        <MudIconButton Size="Size.Small"
+                       Icon="@(_collapsed ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ExpandLess)"
+                       OnClick="@(() => _collapsed = !_collapsed)" />
+    </MudStack>
+
+    <MudCollapse Expanded="@(!_collapsed)">
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+        }
+
+        @if (VersionId == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mt-2 mud-text-secondary">
+                Save the workflow first — a run has to point at a saved version.
+            </MudText>
+        }
+        else if (_subjectId is null)
+        {
+            <MudText Typo="Typo.body2" Class="mt-2 mud-text-secondary">
+                Starts a run against a throwaway subject on this version, published or
+                not. Nothing real is touched, and the run is marked as a test.
+            </MudText>
+        }
+        else
+        {
+            <div class="mt-3">
+                <WorkflowRunner @ref="_runner"
+                                SubjectType="@SubjectType"
+                                SubjectId="@_subjectId"
+                                ActorId="@ActorId" />
+            </div>
+        }
+    </MudCollapse>
+</MudPaper>
+
+@code {
+    /// <summary>The version to run. Zero means nothing has been saved yet.</summary>
+    [Parameter] public int VersionId { get; set; }
+
+    [Parameter] public string ActorId { get; set; } = "tester";
+
+    /// <summary>Subject type test runs are created under. The host decides it, because
+    /// the host is what has to filter these out elsewhere.</summary>
+    [Parameter] public string SubjectType { get; set; } = "WorkflowTest";
+
+    private WorkflowRunner? _runner;
+    private string? _subjectId;
+    private int? _runId;
+    private bool _busy;
+    private bool _collapsed = true;
+    private string? _error;
+
+    private int _startedFrom;
+
+    protected override void OnParametersSet()
+    {
+        // Saving produces a new version id when a published version is forked. A run on
+        // the old one is no longer showing what is on screen, so drop it.
+        if (_startedFrom != 0 && _startedFrom != VersionId)
+        {
+            _subjectId = null;
+            _runId = null;
+            _startedFrom = 0;
+        }
+    }
+
+    private async Task Start()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await Runner.StartTestRunAsync(VersionId, ActorId);
+
+            if (!result.Success)
+            {
+                _error = result.Error;
+                return;
+            }
+
+            _runId = result.RunId;
+            _startedFrom = VersionId;
+            _collapsed = false;
+
+            // The runner finds a run by subject, so it needs the throwaway subject id the
+            // host minted when it started the run.
+            _subjectId = await SubjectIdForAsync(result.RunId);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task<string?> SubjectIdForAsync(int runId)
+    {
+        var detail = await Runner.GetRunAsync(runId, ActorId);
+        return detail?.Run.SubjectId;
+    }
+
+    private async Task Restart()
+    {
+        await Discard();
+        await Start();
+    }
+
+    private async Task Discard()
+    {
+        if (_runId is not { } runId)
+        {
+            return;
+        }
+
+        _busy = true;
+
+        try
+        {
+            var result = await Runner.DeleteTestRunAsync(runId, ActorId);
+
+            if (!result.Success)
+            {
+                _error = result.Error;
+                return;
+            }
+
+            _subjectId = null;
+            _runId = null;
+            _startedFrom = 0;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

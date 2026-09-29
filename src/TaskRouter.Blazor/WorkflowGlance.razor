@@ -1,0 +1,219 @@
+@using TaskRouter.Core.Model
+@using TaskRouter.Core.Runner
+
+@inject IWorkflowRunnerClient Client
+
+@*
+    Where a subject's workflow has got to, small enough to sit under a row.
+
+    The fourth component, and the only read-only one. The runner is for doing the work and
+    needs the room to offer every action; this answers one question — what is happening to
+    this thing — from inside an expansion panel in a list, where a person is scanning rather
+    than acting.
+
+    Shows the mainline: one line per step of the workflow, in the order the workflow declares
+    them, whether or not the run has reached them. Steps that have not happened are the point
+    rather than noise — "nobody has done the review yet" is what somebody scanning a list is
+    looking for.
+
+    Delegated chains and fork branches are deliberately not expanded here. A glance that
+    unfolds into thirty rows is not a glance, and the runner is one click away for anyone who
+    needs the detail.
+*@
+
+<div>
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+    }
+    else if (_error is not null)
+    {
+        @* Surfaced rather than swallowed: a blank panel here reads as "no workflow", which is
+           a different and more reassuring claim than "this did not load". *@
+        <MudAlert Severity="Severity.Error" Dense="true" Class="my-1">@_error</MudAlert>
+    }
+    else if (_run is null)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary pa-2">
+            No workflow has been started on this @SubjectNoun.
+        </MudText>
+    }
+    else
+    {
+        <MudStack Spacing="1" Class="pa-2">
+
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudText Typo="Typo.subtitle2"><b>@_run.WorkflowName</b></MudText>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">v@(_run.Version)</MudChip>
+                <MudChip T="string" Size="Size.Small" Color="@StatusColour(_run.Status)">
+                    @_run.Status
+                </MudChip>
+
+                @if (_olderRuns > 0)
+                {
+                    @*  A subject can carry several workflows, and this shows the newest. Saying
+                        so beats letting somebody believe it is the only one. *@
+                    <MudTooltip Text="@($"{_olderRuns} earlier workflow(s) on this subject")">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text">
+                            +@_olderRuns earlier
+                        </MudChip>
+                    </MudTooltip>
+                }
+
+                <MudSpacer />
+
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @_run.PercentComplete.ToString("F0")% complete
+                </MudText>
+            </MudStack>
+
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Striped="false">
+                <thead>
+                    <tr>
+                        <th>Step</th>
+                        <th>Who</th>
+                        <th>Status</th>
+                        <th>Started</th>
+                        <th>Completed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var step in _steps)
+                    {
+                        <tr>
+                            <td><b>@step.Label</b></td>
+                            <td>
+                                @if ((step.AssignedToDisplayName ?? step.AssignedToActorId) is { } holder)
+                                {
+                                    @holder
+                                }
+                                else if (step.PreAssignedActorId is not null)
+                                {
+                                    @*  Promised, not holding: the step has not been reached and
+                                        somebody is already named for it. Worth showing here --
+                                        "who will do this" is half of what a list view is asked. *@
+                                    <MudTooltip Text="Named in advance">
+                                        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                                            @(step.PreAssignedDisplayName ?? step.PreAssignedActorId) (planned)
+                                        </MudText>
+                                    </MudTooltip>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2" Class="mud-text-secondary">&mdash;</MudText>
+                                }
+                            </td>
+                            <td>
+                                @if (step.Status is { } status)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="@TaskColour(status)">
+                                        @status
+                                    </MudChip>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        not reached
+                                    </MudText>
+                                }
+                            </td>
+                            <td>@Local(step.AssignedDate)</td>
+                            <td>@Local(step.CompletedDate)</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudStack>
+    }
+</div>
+
+@code {
+    /// <summary>The subject's type, as the host spells it — the same string a run carries.</summary>
+    [Parameter, EditorRequired] public string SubjectType { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired] public string SubjectId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// What to call the thing in "no workflow has been started on this ___". A host says
+    /// "document" or "work order"; the engine has no word for it.
+    /// </summary>
+    [Parameter] public string SubjectNoun { get; set; } = "item";
+
+    private RunView? _run;
+    private IReadOnlyList<PlannedStepView> _steps = [];
+    private int _olderRuns;
+    private bool _loading = true;
+    private string? _error;
+
+    private string _loadedFor = string.Empty;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Keyed on the subject, so a grid reusing this component for another row reloads --
+        // and re-rendering the same row does not.
+        var key = $"{SubjectType}:{SubjectId}";
+
+        if (_loadedFor == key)
+        {
+            return;
+        }
+
+        _loadedFor = key;
+        await LoadAsync();
+    }
+
+    /// <summary>Re-reads. Public so a host can refresh after something changes the run.</summary>
+    public async Task RefreshAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+
+        try
+        {
+            var runs = await Client.GetRunsAsync(SubjectType, SubjectId);
+
+            // Newest first, which is what the client returns. The newest is the one somebody
+            // scanning a list means by "the workflow".
+            _run = runs.FirstOrDefault();
+            _olderRuns = Math.Max(0, runs.Count - 1);
+
+            _steps = _run is null
+                ? []
+                : await Client.GetPlannedStepsAsync(_run.Id);
+        }
+        catch (Exception exception)
+        {
+            _error = exception.Message;
+            _run = null;
+            _steps = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// Dates arrive in UTC and are shown in the reader's own zone. Short form, because five
+    /// columns in an expansion panel have no room for seconds.
+    /// </summary>
+    private static string Local(DateTime? utc) =>
+        utc is null ? "—" : utc.Value.ToLocalTime().ToString("d MMM HH:mm");
+
+    private static Color StatusColour(WorkflowRunStatus status) => status switch
+    {
+        WorkflowRunStatus.Completed => Color.Success,
+        WorkflowRunStatus.Cancelled => Color.Default,
+        _ => Color.Info,
+    };
+
+    private static Color TaskColour(WorkflowTaskStatus status) => status switch
+    {
+        WorkflowTaskStatus.Completed => Color.Success,
+        WorkflowTaskStatus.Cancelled => Color.Default,
+        WorkflowTaskStatus.Forked => Color.Warning,
+        _ => Color.Info,
+    };
+}

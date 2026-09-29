@@ -1,0 +1,41 @@
+@using TaskRouter.Core.Runner
+
+@*  Everything that happened to one task. The engine writes a log row per transition,
+    which is what makes a completed run auditable rather than just final. *@
+
+<MudDialog>
+    <DialogContent>
+        @if (Entries.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Nothing recorded yet.</MudText>
+        }
+        else
+        {
+            <MudTimeline TimelinePosition="TimelinePosition.Start">
+                @foreach (var entry in Entries)
+                {
+                    <MudTimelineItem Size="Size.Small">
+                        <MudText Typo="Typo.body2"><b>@entry.Action</b></MudText>
+                        @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                        {
+                            <MudText Typo="Typo.body2">@entry.Detail</MudText>
+                        }
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            @(entry.ActorDisplayName ?? entry.ActorId) — @entry.Created.ToString("g")
+                        </MudText>
+                    </MudTimelineItem>
+                }
+            </MudTimeline>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string TaskLabel { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<LogEntryView> Entries { get; set; } = [];
+}

@@ -1,0 +1,31 @@
+@inherits LayoutComponentBase
+
+@*
+    Shell for the demo. MudThemeProvider/MudDialogProvider have to be here rather than
+    in the builder library: the builder is a component library and must not assume it
+    owns the page.
+*@
+
+<MudThemeProvider />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Dense="true">
+        <MudText Typo="Typo.h6">Demo Documents</MudText>
+        <MudSpacer />
+        <MudButton Href="/inbox" Color="Color.Inherit"
+                   StartIcon="@Icons.Material.Filled.Inbox">My tasks</MudButton>
+        <MudButton Href="/documents" Color="Color.Inherit"
+                   StartIcon="@Icons.Material.Filled.Description">Documents</MudButton>
+        <MudButton Href="/workflows" Color="Color.Inherit"
+                   StartIcon="@Icons.Material.Filled.AccountTree">Workflows</MudButton>
+    </MudAppBar>
+
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 mb-8">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>

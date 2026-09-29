@@ -1,0 +1,25 @@
+@*  A one-field prompt, for notes and cancellation reasons. Returns the text, or a
+    cancelled result -- never an empty string standing in for "cancelled". *@
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_value" Label="@Prompt" Lines="3"
+                      Variant="Variant.Outlined" AutoFocus="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="@(() => Dialog.Close(DialogResult.Ok(_value ?? string.Empty)))">OK</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string Prompt { get; set; } = string.Empty;
+    [Parameter] public string? Value { get; set; }
+
+    private string? _value;
+
+    protected override void OnInitialized() => _value = Value;
+}

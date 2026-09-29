@@ -1,0 +1,66 @@
+@page "/documents"
+
+@inject IDbContextFactory<DemoDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>Documents</PageTitle>
+
+<MudStack Spacing="4">
+    <MudText Typo="Typo.h5" HtmlTag="h1">Documents</MudText>
+
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Stand-ins for the documents a host owns. Opening one shows the same runner
+        component the builder's "Try it" pane uses.
+    </MudText>
+
+    @if (_documents is null)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (_documents.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">
+            No documents yet. POST one to <code>/documents/change-requests</code> to create one with
+            its workflow started.
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_documents" Dense="true" Hover="true" Elevation="1">
+            <HeaderContent>
+                <MudTh>Number</MudTh>
+                <MudTh>Title</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh />
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Number">@context.DocNumber</MudTd>
+                <MudTd DataLabel="Title">@context.Title</MudTd>
+                <MudTd DataLabel="Type">@context.DocumentType</MudTd>
+                <MudTd DataLabel="Status">@context.Status</MudTd>
+                <MudTd>
+                    <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.OpenInNew"
+                               OnClick="@(() => Nav.NavigateTo($"/documents/{context.Id}"))">Open</MudButton>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudStack>
+
+@code {
+    private List<DocumentRow>? _documents;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _documents = await db.Documents
+            .AsNoTracking()
+            .OrderByDescending(d => d.Id)
+            .Select(d => new DocumentRow(d.Id, d.DocNumber, d.Title, d.DocumentType.ToString(), d.Status.ToString()))
+            .ToListAsync();
+    }
+
+    private sealed record DocumentRow(int Id, string DocNumber, string Title, string DocumentType, string Status);
+}

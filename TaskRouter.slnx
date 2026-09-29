@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/DemoDocuments.Server/DemoDocuments.Server.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/TaskRouter.AspNetCore/TaskRouter.AspNetCore.csproj" />
+    <Project Path="src/TaskRouter.Core/TaskRouter.Core.csproj" />
+    <Project Path="src/TaskRouter.Blazor/TaskRouter.Blazor.csproj" />
+    <Project Path="src/TaskRouter.EntityFrameworkCore/TaskRouter.EntityFrameworkCore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TaskRouter.Tests/TaskRouter.Tests.csproj" />
+  </Folder>
+</Solution>

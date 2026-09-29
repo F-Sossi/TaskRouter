@@ -1,0 +1,23 @@
+@page "/workflows/new"
+@page "/workflows/{VersionId:int}"
+
+@inject NavigationManager Nav
+
+<PageTitle>Workflow builder</PageTitle>
+
+<MudStack Spacing="3">
+    <MudStack Row="true" AlignItems="AlignItems.Center">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="@(() => Nav.NavigateTo("/workflows"))" />
+        <MudText Typo="Typo.h5" HtmlTag="h1">Workflow builder</MudText>
+    </MudStack>
+
+    @* Version id 0 is the "new workflow" case; the client hands back a blank model. *@
+    <WorkflowBuilder VersionId="@VersionId" OnPublished="OnPublished" />
+</MudStack>
+
+@code {
+    [Parameter] public int VersionId { get; set; }
+
+    private void OnPublished(int versionId) => Nav.NavigateTo($"/workflows/{versionId}");
+}

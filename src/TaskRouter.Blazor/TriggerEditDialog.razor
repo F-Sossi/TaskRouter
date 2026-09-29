@@ -1,0 +1,264 @@
+@using TaskRouter.Core.Abstractions
+@using TaskRouter.Core.Builder
+@using TaskRouter.Core.Model
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:560px">
+
+            @* Populated from the registry, grouped by namespace — the builder never
+               hardcodes a trigger. *@
+            <MudSelect T="string"
+                       Value="@_edit.TriggerKey"
+                       ValueChanged="OnTriggerChanged"
+                       Label="Trigger action"
+                       Variant="Variant.Outlined"
+                       Required="true">
+                @foreach (var group in Descriptors.GroupBy(d => Namespace(d.Key)).OrderBy(g => g.Key))
+                {
+                    <MudSelectItem T="string" Value="@("__group_" + group.Key)" Disabled="true">
+                        <b>@group.Key</b>
+                    </MudSelectItem>
+
+                    @foreach (var d in group.OrderBy(d => d.DisplayName))
+                    {
+                        <MudSelectItem T="string" Value="@d.Key">@d.DisplayName</MudSelectItem>
+                    }
+                }
+            </MudSelect>
+
+            @if (Selected is not null)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">@Selected.Description</MudText>
+            }
+
+            @* Only events the selected trigger actually handles. The original engine offered every
+               event for every trigger, including combinations that made no sense. *@
+            <MudSelect T="WorkflowEventKind"
+                       Value="@_edit.Event"
+                       ValueChanged="@(v => { _edit.Event = v; StateHasChanged(); })"
+                       Label="Fires when"
+                       Variant="Variant.Outlined"
+                       Disabled="@(Selected is null)">
+                @foreach (var e in Selected?.SupportedEvents ?? [])
+                {
+                    <MudSelectItem T="WorkflowEventKind" Value="@e">@Humanise(e)</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_edit.Event == WorkflowEventKind.Custom)
+            {
+                <MudTextField @bind-Value="_edit.CustomEventName"
+                              Label="Custom event name"
+                              Variant="Variant.Outlined"
+                              Required="true"
+                              HelperText="Matches the name the host passes to RaiseEventAsync." />
+            }
+
+            <MudDivider />
+
+            <TriggerConfigForm Descriptor="Selected"
+                               Configuration="_edit.Configuration"
+                               TaskOptions="TaskOptions"
+                               RoleOptions="RoleOptions" />
+
+            <MudDivider />
+
+            <MudExpansionPanels Elevation="0">
+                <MudExpansionPanel Text="Advanced">
+                    <MudStack Spacing="3">
+
+                        <MudSelect T="TriggerDispatchMode"
+                                   @bind-Value="_edit.DispatchMode"
+                                   Label="When to run"
+                                   Variant="Variant.Outlined"
+                                   HelperText="@DispatchHelp(_edit.DispatchMode)">
+                            @foreach (var m in Enum.GetValues<TriggerDispatchMode>())
+                            {
+                                <MudSelectItem T="TriggerDispatchMode" Value="@m">@Humanise(m)</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudSelect T="TriggerFailurePolicy"
+                                   @bind-Value="_edit.FailurePolicy"
+                                   Label="If it fails"
+                                   Variant="Variant.Outlined"
+                                   HelperText="@FailureHelp(_edit.FailurePolicy)">
+                            @foreach (var f in Enum.GetValues<TriggerFailurePolicy>())
+                            {
+                                <MudSelectItem T="TriggerFailurePolicy" Value="@f">@Humanise(f)</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudTextField @bind-Value="_edit.Condition"
+                                      Label="Condition"
+                                      Variant="Variant.Outlined"
+                                      Placeholder="task.outcome == 'rejected'"
+                                      HelperText="@ConditionHint" />
+
+                        <MudNumericField @bind-Value="_edit.Order"
+                                         Label="Order"
+                                         Variant="Variant.Outlined"
+                                         HelperText="Lower runs first. Matters when one trigger writes a variable another reads." />
+
+                        <MudSwitch T="bool" @bind-Value="_edit.IsActive" Label="Active" Color="Color.Primary" />
+                    </MudStack>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+
+            @if (_errors.Count > 0)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">
+                    <MudList T="string" Dense="true">
+                        @foreach (var e in _errors)
+                        {
+                            <MudListItem T="string" Text="@e" />
+                        }
+                    </MudList>
+                </MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="Save" Disabled="@(Selected is null)">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private const string ConditionHint =
+        "Optional. Paths: task.status task.outcome task.type task.branch task.assignee run.status var.NAME. "
+        + "Operators: == != contains startsWith. Combine with && and ||.";
+
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public TriggerEditModel Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<TriggerDescriptor> Descriptors { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<string, string> TaskOptions { get; set; }
+        = new Dictionary<string, string>();
+    [Parameter] public IReadOnlyList<string> RoleOptions { get; set; } = [];
+
+    /// <summary>
+    /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
+    /// passes reference types by reference, so binding straight to the parameter wrote
+    /// changes into the caller's object the moment they were typed -- and closing with
+    /// Cancel left every one of them applied.
+    /// </summary>
+    private TriggerEditModel _edit = new();
+
+    protected override void OnInitialized() => _edit = Model.Clone();
+
+    private readonly List<string> _errors = [];
+
+    private TriggerDescriptor? Selected =>
+        Descriptors.FirstOrDefault(d => d.Key == _edit.TriggerKey);
+
+    private static string Namespace(string key)
+    {
+        var i = key.IndexOf('.', StringComparison.Ordinal);
+        return i > 0 ? key[..i] : "other";
+    }
+
+    private void OnTriggerChanged(string key)
+    {
+        if (key.StartsWith("__group_", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _edit.TriggerKey = key;
+
+        var descriptor = Selected;
+        if (descriptor is not null)
+        {
+            // Adopt the trigger's own defaults, and drop configuration belonging to
+            // whatever was selected before.
+            _edit.DispatchMode = descriptor.DefaultDispatch;
+            _edit.FailurePolicy = descriptor.DefaultFailurePolicy;
+
+            var valid = descriptor.Parameters.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var stale in _edit.Configuration.Keys.Where(k => !valid.Contains(k)).ToList())
+            {
+                _edit.Configuration.Remove(stale);
+            }
+
+            foreach (var p in descriptor.Parameters.Where(p => p.DefaultValue is not null))
+            {
+                if (!_edit.Configuration.ContainsKey(p.Name))
+                {
+                    _edit.Configuration[p.Name] = p.DefaultValue;
+                }
+            }
+
+            if (!descriptor.SupportedEvents.Contains(_edit.Event) && descriptor.SupportedEvents.Count > 0)
+            {
+                _edit.Event = descriptor.SupportedEvents[0];
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private void Save()
+    {
+        _errors.Clear();
+
+        var descriptor = Selected;
+        if (descriptor is null)
+        {
+            return;
+        }
+
+        // Validated here so a misconfigured trigger is rejected in the builder rather
+        // than failing when it eventually fires.
+        foreach (var p in descriptor.Parameters.Where(p => p.Required))
+        {
+            var value = _edit.Configuration.TryGetValue(p.Name, out var v) ? v : p.DefaultValue;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                _errors.Add($"'{p.Label}' is required.");
+            }
+        }
+
+        if (_edit.Event == WorkflowEventKind.Custom && string.IsNullOrWhiteSpace(_edit.CustomEventName))
+        {
+            _errors.Add("A custom event name is required.");
+        }
+
+        if (_errors.Count > 0)
+        {
+            StateHasChanged();
+            return;
+        }
+
+        Model.CopyFrom(_edit);
+        Dialog.Close(DialogResult.Ok(Model));
+    }
+
+    private void Cancel() => Dialog.Cancel();
+
+    private static string DispatchHelp(TriggerDispatchMode mode) => mode switch
+    {
+        TriggerDispatchMode.InTransaction =>
+            "Runs inside the transaction and rolls back with it. Use for changes to workflow or host data.",
+        TriggerDispatchMode.AfterCommit =>
+            "Runs once the transaction commits, via the outbox. Use for anything with an external side effect.",
+        TriggerDispatchMode.Background =>
+            "Queued for a background worker with retries. Use for slow or failure-prone work.",
+        _ => string.Empty
+    };
+
+    private static string FailureHelp(TriggerFailurePolicy policy) => policy switch
+    {
+        TriggerFailurePolicy.LogAndContinue =>
+            "The failure is recorded and the operation continues.",
+        TriggerFailurePolicy.FailOperation =>
+            "The failure rolls back the whole operation, including the task change that raised it.",
+        _ => string.Empty
+    };
+
+    private static string Humanise(Enum value) =>
+        System.Text.RegularExpressions.Regex.Replace(value.ToString(), "(?<!^)([A-Z])", " $1");
+}

@@ -1,0 +1,1146 @@
+@using TaskRouter.Core.Model
+@using TaskRouter.Core.Runner
+
+@implements IDisposable
+
+@inject IWorkflowRunnerClient Client
+@inject IDialogService Dialogs
+
+@*
+    A running workflow, and the actions available on it.
+
+    Used in two places on purpose: the builder's test pane points it at a throwaway
+    subject, a document page points it at the real one. If these were separate
+    components the builder's preview could drift from what users see, and testing a
+    workflow in the builder would be worth less than nothing.
+
+    Nothing here decides who may do what. RunTaskView.CanComplete comes from the host,
+    because authorization is the host's question -- the engine will complete any task
+    for any actor that asks.
+*@
+
+<MudStack Spacing="3">
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true"
+                  ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">
+            @_error
+        </MudAlert>
+    }
+
+    @if (_runs.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true">
+            No workflow has been started for this @(SubjectType) yet.
+        </MudAlert>
+    }
+    else
+    {
+        @if (_runs.Count > 1)
+        {
+            <MudTabs Elevation="0" Rounded="true" ActivePanelIndexChanged="OnRunTabChanged"
+                     ActivePanelIndex="@_activeRunIndex">
+                @foreach (var run in _runs)
+                {
+                    <MudTabPanel Text="@RunTabLabel(run)" />
+                }
+            </MudTabs>
+        }
+
+        @if (_detail is not null)
+        {
+            var run = _detail.Run;
+
+            <MudPaper Class="pa-3" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.subtitle1"><b>@run.WorkflowName</b></MudText>
+                    @* Parenthesised deliberately: Razor reads "v@run.Version" as an email address and
+                       renders it verbatim, so the chip said "v@run.Version" on screen. *@
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">v@(run.Version)</MudChip>
+                    <MudChip T="string" Size="Size.Small" Color="@StatusColour(run.Status)">
+                        @run.Status
+                    </MudChip>
+                    @if (run.IsTest)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">test run</MudChip>
+                    }
+                    <MudSpacer />
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        @*  Not "P0": PercentComplete is already 0-100, and P0 multiplies by
+                            a hundred again -- a run eighty per cent done read "8,000%". *@
+                        @run.PercentComplete.ToString("F0")%
+                    </MudText>
+                </MudStack>
+
+                @* MudProgressLinear's Value is 0-100, which is what this already is. *@
+                <MudProgressLinear Color="Color.Primary" Value="@run.PercentComplete"
+                                   Class="mt-2" Rounded="true" />
+            </MudPaper>
+
+            @if (_activeFork is { } fork && fork.Branches.Count > 0)
+            {
+                <MudPaper Class="pa-3" Elevation="1">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small"
+                                 Color="Color.Warning" />
+                        <MudText Typo="Typo.subtitle2"><b>Branches</b></MudText>
+
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success">
+                            @fork.CompletedBranchCount done
+                        </MudChip>
+                        @if (fork.PendingBranchCount > 0)
+                        {
+                            @*  "Steps", not "branches". A fork covers every step between the
+                                forked task and the convergence point, so completing all
+                                three branches of a three-step chain leaves six more tasks to
+                                go -- and a chip reading "3 branches outstanding" next to "3
+                                done" reads as a contradiction rather than as progress. *@
+                            <MudTooltip Text="A fork covers every step from the forked task to the convergence point, so each branch finishes its own chain before the fork converges.">
+                                <MudChip T="string" Size="Size.Small">
+                                    @fork.PendingBranchCount step(s) before convergence
+                                </MudChip>
+                            </MudTooltip>
+                        }
+                        @if (fork.CancelledBranchCount > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                                @fork.CancelledBranchCount cancelled
+                            </MudChip>
+                        }
+
+                        <MudSpacer />
+
+                        @if (!fork.IsConvergenceTask && fork.ForkGroupId is not null)
+                        {
+                            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                                       Disabled="@_busy" OnClick="@(() => AddBranches(fork))">
+                                Add branch
+                            </MudButton>
+                        }
+                    </MudStack>
+
+                    @* Cancelled branches count separately from completed ones: lumping
+                       them together is what made the original engine overstate fork progress. *@
+                    <MudSimpleTable Dense="true" Elevation="0" Class="mt-2">
+                        <tbody>
+                            @foreach (var branch in fork.Branches)
+                            {
+                                <tr>
+                                    <td><b>@branch.BranchKey</b></td>
+                                    <td>
+                                        @if (branch.OutcomeKey is not null)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                                @branch.OutcomeKey
+                                            </MudChip>
+                                        }
+                                        else if (branch.Status is { } status)
+                                        {
+                                            <MudText Typo="Typo.caption">@status</MudText>
+                                        }
+                                    </td>
+                                    <td class="mud-text-secondary">
+                                        @(branch.AssignedToDisplayName ?? branch.AssignedToActorId ?? "unassigned")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </MudPaper>
+            }
+
+            @*  Who will pick up the steps nobody has reached yet.
+
+                Collapsed by default: most people opening a run are doing the task in front
+                of them, and this is a manager's view of the whole chain. *@
+            @if (_planned.Count > 0)
+            {
+                <MudExpansionPanels Elevation="1">
+                    <MudExpansionPanel Expanded="@_planningOpen" ExpandedChanged="@(v => _planningOpen = v)">
+                        <TitleContent>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small"
+                                         Color="Color.Primary" />
+                                <MudText Typo="Typo.subtitle2"><b>Planned assignments</b></MudText>
+                                @if (NamedCount > 0)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info">
+                                        @NamedCount named
+                                    </MudChip>
+                                }
+                            </MudStack>
+                        </TitleContent>
+                        <ChildContent>
+                            <MudSimpleTable Dense="true" Elevation="0">
+                                <tbody>
+                                    @foreach (var step in _planned)
+                                    {
+                                        <tr>
+                                            <td><b>@step.Label</b></td>
+                                            <td>
+                                                @if (step.Status is { } status)
+                                                {
+                                                    <MudText Typo="Typo.caption">
+                                                        @status@(step.AssignedToDisplayName is { } who ? $" · {who}" : "")
+                                                    </MudText>
+                                                }
+                                                else
+                                                {
+                                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                        not reached
+                                                    </MudText>
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (step.PreAssignedActorId is not null)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                                                             OnClose="@(() => RemovePreAssignment(step))">
+                                                        @(step.PreAssignedDisplayName ?? step.PreAssignedActorId)
+                                                    </MudChip>
+                                                }
+                                                else if (step.CanPreAssign)
+                                                {
+                                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                        by role
+                                                    </MudText>
+                                                }
+                                                else
+                                                {
+                                                    @*  Forkable steps get one copy per unit, and a started one
+                                                        is a reassignment -- the engine refuses both, so the
+                                                        screen does not offer them. *@
+                                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">&mdash;</MudText>
+                                                }
+                                            </td>
+                                            <td class="d-flex justify-end">
+                                                @if (step.CanPreAssign)
+                                                {
+                                                    <MudButton Size="Size.Small" Variant="Variant.Text"
+                                                               Disabled="@_busy"
+                                                               OnClick="@(() => PreAssign(step))">
+                                                        @(step.PreAssignedActorId is null ? "Assign" : "Change")
+                                                    </MudButton>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        </ChildContent>
+                    </MudExpansionPanel>
+                </MudExpansionPanels>
+            }
+
+            @*  Delegated work sits under the task that delegated it.
+
+                A sub-workflow's tasks belong to the same run as their parent, so an
+                ordinary list puts them among the steps of the workflow itself with nothing
+                to say which is which -- and a reader cannot tell a step somebody has to do
+                from one another section is doing on their behalf. *@
+            @foreach (var task in _ordered)
+            {
+                @if (InstanceHeaderFor(task) is { } instance)
+                {
+                    <MudPaper Class="pa-2 ml-8" Elevation="0"
+                              Style="border-left: 3px solid var(--mud-palette-info);">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIconButton Size="Size.Small"
+                                           Icon="@(IsExpanded(instance.Id)
+                                                   ? Icons.Material.Filled.ExpandLess
+                                                   : Icons.Material.Filled.ExpandMore)"
+                                           OnClick="@(() => ToggleInstance(instance.Id))" />
+                            <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small"
+                                     Color="Color.Info" />
+                            <MudText Typo="Typo.subtitle2"><b>@instance.Name</b></MudText>
+
+                            @if (InstanceOrgUnit(instance) is { } unit)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                    @unit
+                                </MudChip>
+                            }
+                            @if (instance.IsBlocking && instance.IsRunning)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Secondary">
+                                    blocking
+                                </MudChip>
+                            }
+                            @if (!instance.IsRunning)
+                            {
+                                <MudChip T="string" Size="Size.Small">finished</MudChip>
+                            }
+
+                            <MudSpacer />
+
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                delegated from @ParentLabel(instance)
+                            </MudText>
+                        </MudStack>
+                    </MudPaper>
+                }
+
+                @if (task.SubWorkflowInstanceId is not { } owner || IsExpanded(owner))
+                {
+                <MudPaper Class="@TaskClass(task)" Elevation="1">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@StatusIcon(task.Status)" Color="@TaskColour(task.Status)"
+                                 Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle2"><b>@task.Label</b></MudText>
+
+                        @if (task.OutcomeKey is not null)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">
+                                @task.OutcomeKey
+                            </MudChip>
+                        }
+                        @if (task.IsAdHoc)
+                        {
+                            <MudChip T="string" Size="Size.Small">ad-hoc</MudChip>
+                        }
+                        @if (task.IsBlocking && task.Status != WorkflowTaskStatus.Completed)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary">blocking</MudChip>
+                        }
+                        @if (task.RunningSubWorkflowCount > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                                     Icon="@Icons.Material.Filled.AccountTree">
+                                @task.RunningSubWorkflowCount sub-workflow(s) running
+                            </MudChip>
+                        }
+                        @if (task.AssignedBranchKey is not null)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                @(task.AssignedBranchLabel ?? task.AssignedBranchKey)
+                            </MudChip>
+                        }
+
+                        @* A date, not a countdown. The inbox is a triage list where
+                           "3d overdue" is the useful form; the runner is where one task is
+                           worked, and the actual deadline is what somebody needs to read
+                           off the screen. UTC column, so UtcNow is the comparison. *@
+                        @if (task.DueDate is { } due)
+                        {
+                            <MudChip T="string" Size="Size.Small"
+                                     Variant="Variant.Outlined"
+                                     Color="@(due < DateTime.UtcNow ? Color.Error : Color.Default)"
+                                     Icon="@Icons.Material.Filled.Schedule">
+                                @due.ToString("d MMM yyyy")
+                            </MudChip>
+                        }
+
+                        @* A chip of its own, unlike the inbox's suffix. One task is being
+                           worked here rather than triaged among many, so "somebody has
+                           already been told about this" is a fact worth its own weight
+                           instead of a footnote on the date.
+
+                           Deliberately a sibling of the due-date block rather than nested inside it, and
+                           deliberately independent of whether the task is still late. OverdueFiredAt is a
+                           one-way stamp while the sweep keeps repairing DueDate underneath it, so the two
+                           disagree whenever a deadline moves after an escalation fired. Nesting this inside
+                           the has-a-date branch would lose the marker entirely when a deadline is removed --
+                           the one fact this chip exists to carry. It is history, not status: once somebody
+                           has been told, that stays true. *@
+                        @if (task.OverdueFiredAt is not null)
+                        {
+                            <MudChip T="string" Size="Size.Small"
+                                     Variant="Variant.Outlined"
+                                     Color="Color.Warning"
+                                     Icon="@Icons.Material.Filled.NotificationImportant">
+                                escalated
+                            </MudChip>
+                        }
+
+                        <MudSpacer />
+
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            @(task.AssignedToDisplayName ?? task.AssignedToActorId ?? "unassigned")
+                        </MudText>
+                    </MudStack>
+
+                    @if (!string.IsNullOrWhiteSpace(task.Notes))
+                    {
+                        <MudText Typo="Typo.body2" Class="mt-1 mud-text-secondary">@task.Notes</MudText>
+                    }
+
+                    @if (task.CanComplete)
+                    {
+                        @if (task.BlockingSubWorkflowCount > 0)
+                        {
+                            @* An engine rule surfaced before the action rather than as an
+                               exception after it -- the same standard the fork and
+                               rejection dialogs hold to. A Complete button here would
+                               throw as soon as it was pressed. *@
+                            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                                <MudStack Spacing="1">
+                                    <div>Waiting on:</div>
+                                    @foreach (var instance in BlockingInstances(task))
+                                    {
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                            <span>@instance.Name</span>
+                                            <MudButton Size="Size.Small" Color="Color.Error"
+                                                       Variant="Variant.Text" Disabled="@_busy"
+                                                       OnClick="@(() => CancelSubWorkflow(instance))">
+                                                Cancel it
+                                            </MudButton>
+                                        </MudStack>
+                                    }
+                                </MudStack>
+                            </MudAlert>
+                        }
+
+                        <MudStack Row="true" Spacing="1" Class="mt-2" AlignItems="AlignItems.Center">
+                            @* Everything but the outcomes stays available while blocked:
+                               notes, reassignment and history are not what the engine
+                               refuses. *@
+                            @if (task.BlockingSubWorkflowCount == 0)
+                            {
+                                @foreach (var outcome in Outcomes(task.Id))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled"
+                                               Color="@OutcomeColour(outcome.OutcomeKey)"
+                                               StartIcon="@(NeedsBranchChoice(task, outcome) ? Icons.Material.Filled.CallSplit : null)"
+                                               Disabled="@_busy"
+                                               OnClick="@(() => Complete(task, outcome))">
+                                        @outcome.DisplayName@(NeedsBranchChoice(task, outcome) ? "…" : "")
+                                    </MudButton>
+                                }
+
+                                @if (Outcomes(task.Id).Count == 0)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Warning">
+                                        This task defines no outcomes, so it cannot be completed.
+                                    </MudText>
+                                }
+                            }
+
+                            <MudSpacer />
+
+                            @if (task.HasSubWorkflowOptions)
+                            {
+                                <MudTooltip Text="Start a sub-workflow">
+                                    <MudIconButton Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small"
+                                                   Color="Color.Info"
+                                                   Disabled="@_busy" OnClick="@(() => StartSubWorkflow(task))" />
+                                </MudTooltip>
+                            }
+
+                            @if (task.IsForkable && task.ForkGroupId is null)
+                            {
+                                <MudTooltip Text="Fork across units">
+                                    <MudIconButton Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small"
+                                                   Color="Color.Warning"
+                                                   Disabled="@_busy" OnClick="@(() => Fork(task))" />
+                                </MudTooltip>
+                            }
+
+                            <MudTooltip Text="Notes">
+                                <MudIconButton Icon="@Icons.Material.Filled.EditNote" Size="Size.Small"
+                                               Disabled="@_busy" OnClick="@(() => EditNotes(task))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Reassign">
+                                <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small"
+                                               Disabled="@_busy" OnClick="@(() => Reassign(task))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Add ad-hoc task">
+                                <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Small"
+                                               Disabled="@_busy" OnClick="@(() => AddAdHoc(task))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Cancel task">
+                                <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small"
+                                               Disabled="@_busy" OnClick="@(() => Cancel(task))" />
+                            </MudTooltip>
+                            <MudTooltip Text="History">
+                                <MudIconButton Icon="@Icons.Material.Filled.History" Size="Size.Small"
+                                               OnClick="@(() => ShowLog(task))" />
+                            </MudTooltip>
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudStack Row="true" Class="mt-1" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @StatusCaption(task)
+                            </MudText>
+                            <MudSpacer />
+                            <MudTooltip Text="History">
+                                <MudIconButton Icon="@Icons.Material.Filled.History" Size="Size.Small"
+                                               OnClick="@(() => ShowLog(task))" />
+                            </MudTooltip>
+                        </MudStack>
+                    }
+                </MudPaper>
+                }
+            }
+        }
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public string SubjectType { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string SubjectId { get; set; } = string.Empty;
+
+    /// <summary>Who the actions are performed as. A host with authentication passes the
+    /// signed-in user; the demo passes a picker's selection.</summary>
+    [Parameter, EditorRequired] public string ActorId { get; set; } = string.Empty;
+
+    /// <summary>Raised after anything that changes the run, so a host can refresh
+    /// whatever it shows alongside — a document's status, a progress bar.</summary>
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private List<RunView> _runs = [];
+    private RunDetail? _detail;
+    private int _activeRunIndex;
+    private string? _error;
+    private bool _busy;
+
+    // Outcomes are per task definition and never change during a run, so they are
+    // fetched once per task rather than on every render.
+    private readonly Dictionary<int, IReadOnlyList<OutcomeOption>> _outcomes = [];
+
+    /// <summary>Fork state for whichever task in this run is part of one. A run has at
+    /// most one fork outstanding at a time, so one is enough to show.</summary>
+    private ForkInfo? _activeFork;
+
+    /// <summary>Sub-workflow instances in the loaded run. A task carries only counts, so
+    /// naming what it is waiting on -- and offering to cancel it -- needs these.</summary>
+    private IReadOnlyList<SubWorkflowInstanceView> _instances = [];
+
+    private string _loadedFor = string.Empty;
+
+    /// <summary>
+    /// One load at a time.
+    ///
+    /// A parent that resolves its own data asynchronously re-renders when it finishes,
+    /// which fires OnParametersSetAsync again while the first load is still awaiting.
+    /// Two loads then run concurrently against whatever the host put behind
+    /// IWorkflowRunnerClient — and if that is an EF DbContext, as it is in any Blazor
+    /// Server host, the second one throws: a DbContext permits one operation at a time.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = $"{SubjectType}/{SubjectId}";
+
+        if (key != _loadedFor)
+        {
+            _loadedFor = key;
+            _activeRunIndex = 0;
+            await ReloadAsync();
+        }
+    }
+
+    /// <summary>Reloads from the host. Public so a parent can refresh after starting a
+    /// run itself — the builder's test pane does exactly that.</summary>
+    public async Task ReloadAsync()
+    {
+        await _gate.WaitAsync();
+
+        try
+        {
+            _runs = [.. await Client.GetRunsAsync(SubjectType, SubjectId)];
+
+            if (_runs.Count == 0)
+            {
+                _detail = null;
+                _outcomes.Clear();
+                StateHasChanged();
+                return;
+            }
+
+            _activeRunIndex = Math.Clamp(_activeRunIndex, 0, _runs.Count - 1);
+            await LoadRunCoreAsync(_runs[_activeRunIndex].Id);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task LoadRunAsync(int runId)
+    {
+        await _gate.WaitAsync();
+
+        try
+        {
+            await LoadRunCoreAsync(runId);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task LoadRunCoreAsync(int runId)
+    {
+        _detail = await Client.GetRunAsync(runId, ActorId);
+        _outcomes.Clear();
+
+        _activeFork = null;
+        _instances = [];
+        _planned = [];
+        _ordered = [];
+        _instanceHeaders.Clear();
+
+        if (_detail is not null)
+        {
+            // Sequential like everything else in here: the host's client is an EF
+            // DbContext, which permits one operation at a time.
+            _instances = await Client.GetSubWorkflowInstancesAsync(runId);
+
+            // Finished chains start collapsed, running ones open -- delegated work still in
+            // progress is work somebody has to act on, and a panel that hides it by default
+            // is a panel nobody opens.
+            //
+            // Applied once per instance, not on every load. A reload follows every action,
+            // so re-applying it would re-collapse a finished chain the reader had just
+            // opened, every time they did anything.
+            foreach (var instance in _instances.Where(i => _defaultedInstances.Add(i.Id)))
+            {
+                if (!instance.IsRunning)
+                {
+                    _ = _collapsedInstances.Add(instance.Id);
+                }
+            }
+
+            _planned = await Client.GetPlannedStepsAsync(runId);
+
+            BuildOrderedTasks();
+
+            foreach (var task in _detail.Tasks.Where(t => t.CanComplete))
+            {
+                _outcomes[task.Id] = await Client.GetOutcomesAsync(task.Id);
+            }
+
+            // Prefer the convergence task's view: once branches have closed it is the
+            // manifest that says what each of them decided, which is what rejection is
+            // chosen from. Otherwise show the fork as it currently stands.
+            var forkTask = _detail.Tasks.FirstOrDefault(t => t.CanComplete && t.IsConvergencePoint)
+                        ?? _detail.Tasks.FirstOrDefault(t => t.ForkGroupId is not null);
+
+            if (forkTask is not null)
+            {
+                _activeFork = await Client.GetForkInfoAsync(forkTask.Id);
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task OnRunTabChanged(int index)
+    {
+        _activeRunIndex = index;
+
+        if (index >= 0 && index < _runs.Count)
+        {
+            await LoadRunAsync(_runs[index].Id);
+        }
+    }
+
+    private IReadOnlyList<OutcomeOption> Outcomes(int taskId) =>
+        _outcomes.TryGetValue(taskId, out var o) ? o : [];
+
+    /// <summary>What is actually holding this task up. Running but non-blocking
+    /// instances are left out: they do not stop it completing.</summary>
+    private IEnumerable<SubWorkflowInstanceView> BlockingInstances(RunTaskView task) =>
+        _instances.Where(i => i.ParentTaskId == task.Id && i.IsRunning && i.IsBlocking);
+
+    /// <summary>
+    /// Every step of the run's workflow, with who holds it and who is promised it. Empty for
+    /// a host that has not mapped the planning endpoints, which is why the panel checks.
+    /// </summary>
+    private IReadOnlyList<PlannedStepView> _planned = [];
+
+    private bool _planningOpen;
+
+    private int NamedCount => _planned.Count(p => p.PreAssignedActorId is not null);
+
+    /// <summary>
+    /// Instances the reader has collapsed, plus the ones that started collapsed.
+    ///
+    /// <para>Finished chains collapse on load and running ones do not: delegated work still
+    /// in progress is work somebody has to act on, and a panel hiding it by default is a
+    /// panel nobody opens.</para>
+    /// </summary>
+    private readonly HashSet<int> _collapsedInstances = [];
+
+    /// <summary>Instances the collapse default has already been applied to.</summary>
+    private readonly HashSet<int> _defaultedInstances = [];
+
+    /// <summary>The run's tasks, delegated chains gathered under their parent.</summary>
+    private List<RunTaskView> _ordered = [];
+
+    /// <summary>
+    /// Task id → the instance header to draw before it. One entry per instance, on the first
+    /// of its tasks, so the header renders once and outside the collapse — it is what
+    /// reopens a chain that has been closed.
+    /// </summary>
+    private readonly Dictionary<int, SubWorkflowInstanceView> _instanceHeaders = [];
+
+    private bool IsExpanded(int instanceId) => !_collapsedInstances.Contains(instanceId);
+
+    private void ToggleInstance(int instanceId)
+    {
+        if (!_collapsedInstances.Remove(instanceId))
+        {
+            _ = _collapsedInstances.Add(instanceId);
+        }
+    }
+
+    /// <summary>
+    /// Gathers each delegated chain under the task that spawned it, and works out where the
+    /// chain headers go. Built once per load rather than per render: the engine returns one
+    /// flat list in creation order, which interleaves a sub-workflow's tasks with whatever
+    /// else happened while it ran.
+    ///
+    /// <para>Grouping is a display decision and stays here rather than moving into the seam —
+    /// a host rendering its own runner may well want the flat list.</para>
+    ///
+    /// <para>Delegated tasks whose instance is not in this run are appended rather than
+    /// dropped. It should not happen; showing a task out of place beats hiding one nobody
+    /// can then act on.</para>
+    /// </summary>
+    private void BuildOrderedTasks()
+    {
+        _ordered = [];
+        _instanceHeaders.Clear();
+
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var byInstance = _detail.Tasks
+            .Where(t => t.SubWorkflowInstanceId is not null)
+            .GroupBy(t => t.SubWorkflowInstanceId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var placed = new HashSet<int>();
+
+        foreach (var task in _detail.Tasks.Where(t => t.SubWorkflowInstanceId is null))
+        {
+            _ordered.Add(task);
+
+            foreach (var instance in _instances
+                         .Where(i => i.ParentTaskId == task.Id)
+                         .OrderBy(i => i.Id))
+            {
+                if (!byInstance.TryGetValue(instance.Id, out var chain) || chain.Count == 0)
+                {
+                    continue;
+                }
+
+                _instanceHeaders[chain[0].Id] = instance;
+                _ordered.AddRange(chain);
+                _ = placed.Add(instance.Id);
+            }
+        }
+
+        _ordered.AddRange(_detail.Tasks.Where(t =>
+            t.SubWorkflowInstanceId is { } id && !placed.Contains(id)));
+    }
+
+    private SubWorkflowInstanceView? InstanceHeaderFor(RunTaskView task) =>
+        _instanceHeaders.GetValueOrDefault(task.Id);
+
+    /// <summary>
+    /// What org unit the chain belongs to, from its own tasks — the instance carries no
+    /// assignment of its own, and the unit is the thing that decides who its reviews reach.
+    /// </summary>
+    private string? InstanceOrgUnit(SubWorkflowInstanceView instance) =>
+        _detail?.Tasks
+            .FirstOrDefault(t => t.SubWorkflowInstanceId == instance.Id
+                                 && t.AssignedBranchKey is not null) is { } task
+            ? task.AssignedBranchLabel ?? task.AssignedBranchKey
+            : null;
+
+    private string ParentLabel(SubWorkflowInstanceView instance) =>
+        _detail?.Tasks.FirstOrDefault(t => t.Id == instance.ParentTaskId)?.Label ?? "a task";
+
+    // ─────────────────────────────── Actions ───────────────────────────────
+
+    /// <summary>
+    /// Every action goes through here: run it, surface any message, reload, tell the
+    /// host. Reloading rather than patching local state is deliberate — completing a
+    /// task can create others, converge a fork or finish the run, and guessing at that
+    /// client-side is how a UI ends up disagreeing with the engine.
+    /// </summary>
+    private async Task PerformAsync(Func<Task<RunnerResult>> action)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await action();
+
+            if (!result.Success)
+            {
+                _error = result.Error;
+            }
+
+            await ReloadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// A rework outcome on a convergence task cannot go through the ordinary path: the
+    /// engine refuses it, because completing that way gives it no way to know which
+    /// branches were the problem. Those outcomes open the rejection dialog instead.
+    /// </summary>
+    private bool NeedsBranchChoice(RunTaskView task, OutcomeOption outcome) =>
+        outcome.IsRework && task.IsConvergencePoint && _activeFork is { Branches.Count: > 0 };
+
+    private async Task Complete(RunTaskView task, OutcomeOption outcome)
+    {
+        if (NeedsBranchChoice(task, outcome))
+        {
+            await RejectBranches(task, outcome);
+            return;
+        }
+
+        await PerformAsync(() => Client.CompleteAsync(task.Id, outcome.OutcomeKey, ActorId, null));
+    }
+
+    private async Task RejectBranches(RunTaskView task, OutcomeOption outcome)
+    {
+        var parameters = new DialogParameters<RunnerRejectionDialog>
+        {
+            { x => x.TaskLabel, task.Label },
+            { x => x.OutcomeKey, outcome.OutcomeKey },
+            { x => x.OutcomeDisplayName, outcome.DisplayName },
+            { x => x.Branches, _activeFork!.Branches }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerRejectionDialog>(
+            "Accept or send back", parameters, MediumDialog);
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: SelectiveRejectionRequest request })
+        {
+            await PerformAsync(() => Client.CompleteWithSelectiveRejectionAsync(
+                task.Id, request.OutcomeKey, request.RejectedBranchKeys, ActorId, request.Notes));
+        }
+    }
+
+    private async Task Fork(RunTaskView task)
+    {
+        var branches = await Client.GetBranchOptionsAsync(task.Id);
+        var convergences = await Client.GetConvergenceOptionsAsync(task.Id);
+
+        if (convergences.Count == 0)
+        {
+            _error = "This workflow has nowhere for branches to converge.";
+            return;
+        }
+
+        var parameters = new DialogParameters<RunnerForkDialog>
+        {
+            { x => x.TaskLabel, task.Label },
+            { x => x.Branches, branches },
+            { x => x.Convergences, convergences },
+            { x => x.CurrentBranchKey, task.AssignedBranchKey }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerForkDialog>($"Fork {task.Label}", parameters, MediumDialog);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: ForkRequest request })
+        {
+            await PerformAsync(() => Client.ForkAsync(
+                task.Id, request.BranchKeys, request.ConvergenceTaskDefinitionId, ActorId, request.Notes));
+        }
+    }
+
+    private async Task StartSubWorkflow(RunTaskView task)
+    {
+        var options = await Client.GetSubWorkflowOptionsAsync(task.Id);
+
+        if (options.Count == 0)
+        {
+            _error = "Nothing is attached to this task.";
+            return;
+        }
+
+        var parameters = new DialogParameters<RunnerSubWorkflowDialog>
+        {
+            { x => x.ParentLabel, task.Label },
+            { x => x.Options, options },
+            { x => x.Actors, await Client.GetActorsAsync() },
+            { x => x.OrgUnits, await Client.GetOrgUnitsAsync() },
+            { x => x.CurrentBranchKey, task.AssignedBranchKey }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerSubWorkflowDialog>("Start sub-workflow", parameters, SmallDialog);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: SubWorkflowRequest request })
+        {
+            await PerformAsync(() => Client.StartSubWorkflowAsync(
+                task.Id, request.SubWorkflowDefinitionId, ActorId,
+                request.AssignToActorId, request.AssignToBranchKey, request.Notes));
+        }
+    }
+
+    /// <summary>
+    /// Names who will handle a step the run has not reached. The picker is the host's
+    /// directory — the same list reassignment uses, because it is the same question asked
+    /// earlier.
+    /// </summary>
+    private async Task PreAssign(PlannedStepView step)
+    {
+        var parameters = new DialogParameters<RunnerReassignDialog>
+        {
+            { x => x.TaskLabel, step.Label },
+            { x => x.Actors, await Client.GetActorsAsync() },
+            { x => x.OrgUnits, await Client.GetOrgUnitsAsync() },
+            { x => x.CurrentActorId, step.PreAssignedActorId },
+            { x => x.CurrentBranchKey, step.PreAssignedBranchKey }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerReassignDialog>(
+            $"Who will handle {step.Label}?", parameters, SmallDialog);
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: ReassignRequest request })
+        {
+            if (string.IsNullOrWhiteSpace(request.ActorId))
+            {
+                // Clearing the person is the dialog's way of saying "nobody in particular",
+                // which for a step that has not happened means falling back to its role.
+                await PerformAsync(() => Client.RemovePreAssignmentAsync(
+                    _detail!.Run.Id, step.TaskDefinitionId, ActorId));
+                return;
+            }
+
+            await PerformAsync(() => Client.PreAssignAsync(
+                _detail!.Run.Id, step.TaskDefinitionId, request.ActorId!, request.BranchKey, ActorId));
+        }
+    }
+
+    private async Task RemovePreAssignment(PlannedStepView step) =>
+        await PerformAsync(() => Client.RemovePreAssignmentAsync(
+            _detail!.Run.Id, step.TaskDefinitionId, ActorId));
+
+    private async Task CancelSubWorkflow(SubWorkflowInstanceView instance)
+    {
+        var reason = await PromptAsync(
+            "Cancel sub-workflow", $"Why is '{instance.Name}' being abandoned?");
+
+        if (reason is not null)
+        {
+            await PerformAsync(() => Client.CancelSubWorkflowAsync(instance.Id, ActorId, reason));
+        }
+    }
+
+    private async Task AddBranches(ForkInfo fork)
+    {
+        var anyBranchTask = _detail?.Tasks.FirstOrDefault(t => t.ForkGroupId == fork.ForkGroupId);
+
+        if (anyBranchTask is null || fork.ForkGroupId is not { } groupId)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<RunnerAddBranchDialog>
+        {
+            { x => x.Branches, await Client.GetBranchOptionsAsync(anyBranchTask.Id) }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerAddBranchDialog>("Add branches", parameters, MediumDialog);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: AddBranchRequest request })
+        {
+            await PerformAsync(() => Client.AddBranchesAsync(
+                groupId, request.BranchKeys, ActorId, request.Notes));
+        }
+    }
+
+    private async Task Cancel(RunTaskView task)
+    {
+        var note = await PromptAsync("Cancel task", $"Why is '{task.Label}' being cancelled?");
+
+        if (note is not null)
+        {
+            await PerformAsync(() => Client.CancelAsync(task.Id, ActorId, note));
+        }
+    }
+
+    private async Task EditNotes(RunTaskView task)
+    {
+        var notes = await PromptAsync("Notes", $"Notes for '{task.Label}'", task.Notes);
+
+        if (notes is not null)
+        {
+            await PerformAsync(() => Client.UpdateNotesAsync(task.Id, notes, ActorId));
+        }
+    }
+
+    private async Task Reassign(RunTaskView task)
+    {
+        var parameters = new DialogParameters<RunnerReassignDialog>
+        {
+            { x => x.TaskLabel, task.Label },
+            { x => x.Actors, await Client.GetActorsAsync() },
+            { x => x.OrgUnits, await Client.GetOrgUnitsAsync() },
+            { x => x.CurrentActorId, task.AssignedToActorId },
+            { x => x.CurrentBranchKey, task.AssignedBranchKey }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerReassignDialog>("Reassign task", parameters, SmallDialog);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: ReassignRequest request })
+        {
+            await PerformAsync(() => Client.ReassignAsync(
+                task.Id, request.ActorId, request.BranchKey, ActorId, request.Note));
+        }
+    }
+
+    private async Task AddAdHoc(RunTaskView task)
+    {
+        var options = await Client.GetAdHocOptionsAsync(task.Id);
+
+        if (options.Count == 0)
+        {
+            _error = "This workflow defines no ad-hoc tasks.";
+            return;
+        }
+
+        var parameters = new DialogParameters<RunnerAdHocDialog>
+        {
+            { x => x.ParentLabel, task.Label },
+            { x => x.Options, options }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerAdHocDialog>("Add ad-hoc task", parameters, SmallDialog);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: AdHocRequest request })
+        {
+            await PerformAsync(() => Client.AddAdHocAsync(
+                task.Id, request.TaskDefinitionId, ActorId, request.Notes));
+        }
+    }
+
+    private async Task ShowLog(RunTaskView task)
+    {
+        var parameters = new DialogParameters<RunnerLogDialog>
+        {
+            { x => x.TaskLabel, task.Label },
+            { x => x.Entries, await Client.GetLogAsync(task.Id) }
+        };
+
+        await Dialogs.ShowAsync<RunnerLogDialog>($"History — {task.Label}", parameters, MediumDialog);
+    }
+
+    private async Task<string?> PromptAsync(string title, string prompt, string? initial = null)
+    {
+        var parameters = new DialogParameters<RunnerPromptDialog>
+        {
+            { x => x.Prompt, prompt },
+            { x => x.Value, initial }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerPromptDialog>(title, parameters, SmallDialog);
+        var result = await dialog.Result;
+
+        return result is { Canceled: false, Data: string text } ? text : null;
+    }
+
+    // ─────────────────────────────── Dialog sizing ───────────────────────────────
+    //
+    // Passed explicitly at every ShowAsync rather than left to MudDialogProvider. A host sets
+    // that provider for its own screens -- one real host runs FullWidth with MaxWidth.False --
+    // and without options these dialogs inherit it, so a two-field reassign form stretches the
+    // width of the window. The size is a property of the dialog, so the caller states it.
+
+    /// <summary>A short form: a picker or two, or a note.</summary>
+    private static readonly DialogOptions SmallDialog =
+        new() { MaxWidth = MaxWidth.Small, FullWidth = true };
+
+    /// <summary>A list to read, or a form with choices to compare.</summary>
+    private static readonly DialogOptions MediumDialog =
+        new() { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+    // ─────────────────────────────── Presentation ───────────────────────────────
+
+    private string RunTabLabel(RunView run) =>
+        $"{run.WorkflowName} v{run.Version}" + (run.IsTest ? " (test)" : string.Empty);
+
+    private static Color StatusColour(WorkflowRunStatus status) => status switch
+    {
+        WorkflowRunStatus.Completed => Color.Success,
+        WorkflowRunStatus.Cancelled => Color.Error,
+        _ => Color.Info
+    };
+
+    private static Color TaskColour(WorkflowTaskStatus status) => status switch
+    {
+        WorkflowTaskStatus.Completed => Color.Success,
+        WorkflowTaskStatus.Cancelled => Color.Error,
+        WorkflowTaskStatus.Forked => Color.Warning,
+        WorkflowTaskStatus.InProgress => Color.Primary,
+        _ => Color.Default
+    };
+
+    private static string StatusIcon(WorkflowTaskStatus status) => status switch
+    {
+        WorkflowTaskStatus.Completed => Icons.Material.Filled.CheckCircle,
+        WorkflowTaskStatus.Cancelled => Icons.Material.Filled.Cancel,
+        WorkflowTaskStatus.Forked => Icons.Material.Filled.CallSplit,
+        WorkflowTaskStatus.InProgress => Icons.Material.Filled.PlayCircle,
+        _ => Icons.Material.Filled.RadioButtonUnchecked
+    };
+
+    /// <summary>Colour by convention, not by configuration: outcome keys are free text,
+    /// so this only tints the ones that read as a rejection.</summary>
+    private static Color OutcomeColour(string outcomeKey) =>
+        outcomeKey.Contains("reject", StringComparison.OrdinalIgnoreCase)
+        || outcomeKey.Contains("deny", StringComparison.OrdinalIgnoreCase)
+        || outcomeKey.Contains("return", StringComparison.OrdinalIgnoreCase)
+            ? Color.Error
+            : Color.Primary;
+
+    private static string TaskClass(RunTaskView task) =>
+        task.Status is WorkflowTaskStatus.Completed or WorkflowTaskStatus.Cancelled
+            ? "pa-3 mud-opacity-75"
+            : "pa-3";
+
+    private static string StatusCaption(RunTaskView task) => task.Status switch
+    {
+        WorkflowTaskStatus.Completed => $"Completed {task.CompletedDate:g}",
+        WorkflowTaskStatus.Cancelled => "Cancelled",
+        WorkflowTaskStatus.Forked => "Superseded by a fork",
+        _ => task.Status.ToString()
+    };
+
+    public void Dispose() => _gate.Dispose();
+
+    public sealed record ReassignRequest(string? ActorId, string? BranchKey, string? Note);
+
+    public sealed record ForkRequest(
+        IReadOnlyList<string> BranchKeys, int ConvergenceTaskDefinitionId, string? Notes);
+
+    public sealed record AddBranchRequest(IReadOnlyList<string> BranchKeys, string? Notes);
+
+    public sealed record SubWorkflowRequest(
+        int SubWorkflowDefinitionId, string? AssignToActorId, string? AssignToBranchKey,
+        string? Notes);
+
+    public sealed record SelectiveRejectionRequest(
+        string OutcomeKey, IReadOnlyList<string> RejectedBranchKeys, string? Notes);
+
+    public sealed record AdHocRequest(int TaskDefinitionId, string? Notes);
+}

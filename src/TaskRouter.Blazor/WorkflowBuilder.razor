@@ -1,0 +1,668 @@
+@using TaskRouter.Core.Abstractions
+@using TaskRouter.Core.Builder
+@using TaskRouter.Core.Validation
+
+@inject IWorkflowBuilderClient Client
+@inject IDialogService Dialogs
+
+@*
+    The workflow editor: a task list with routing and triggers, rather than a
+    flowchart canvas. Deliberately form-shaped, because the people configuring
+    workflows are administrators describing a review chain, not developers composing
+    an activity graph.
+*@
+
+@if (_model is null)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else
+{
+    <MudStack Spacing="4">
+
+        @*
+            Two panels, because these fields do not behave alike. Name and description
+            identify the workflow across every version, so editing them changes what the
+            published version is called too. Everything below belongs to this version
+            alone. Presenting them together implied all of it was per-version, which was
+            wrong in a way that mattered: subject type decides which documents a workflow
+            starts for.
+        *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" />
+                <MudText Typo="Typo.subtitle2">Workflow</MudText>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">all versions</MudChip>
+            </MudStack>
+
+            <MudGrid>
+                <MudItem xs="12" md="5">
+                    <MudTextField @bind-Value="_model.Name" Label="Workflow name"
+                                  Variant="Variant.Outlined" Required="true"
+                                  HelperText="Shared by every version, published ones included." />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="_model.Description" Label="Description"
+                                  Variant="Variant.Outlined"
+                                  HelperText="Also shared by every version." />
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudSwitch T="bool" @bind-Value="_model.IsSubWorkflow" Color="Color.Info"
+                               Label="Reusable sub-workflow" />
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        Attached to a task rather than started against a document.
+                    </MudText>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Layers" Size="Size.Small" />
+                <MudText Typo="Typo.subtitle2">This version</MudText>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_model.IsPublished ? Color.Success : Color.Default)">
+                    Version @_model.Version @(_model.IsPublished ? "(published)" : "(draft)")
+                </MudChip>
+            </MudStack>
+
+            @* A published version is immutable because runs are pinned to it -- changing one
+               would rewrite the rules under work already in flight. Saving does not fail; it
+               forks. Saying so here means the next version does not arrive as a surprise. *@
+            @if (_model.IsPublished)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    This version is published, so it cannot be changed — runs already on it
+                    follow these rules to the end. Saving creates version
+                    @(_model.Version + 1) as a draft, and publishing that makes it the one new
+                    runs start on.
+                </MudAlert>
+            }
+
+            <MudGrid>
+                <MudItem xs="12" md="4">
+                    @* A list when the host has told us its subject types, free text when it
+                       has not. Typing the string by hand is how a workflow ends up attached to
+                       a subject type nothing uses, which shows up as it never being offered. *@
+                    @if (_subjectTypes.Count > 0)
+                    {
+                        <MudSelect T="string" @bind-Value="_model.SubjectType"
+                                   Label="Applies to" Variant="Variant.Outlined" Clearable="true"
+                                   HelperText="Which kind of thing this workflow runs on. Applies to this version only.">
+                            @foreach (var subjectType in _subjectTypes)
+                            {
+                                <MudSelectItem T="string" Value="@subjectType">@subjectType</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else
+                    {
+                        <MudTextField @bind-Value="_model.SubjectType" Label="Applies to subject type"
+                                      Variant="Variant.Outlined"
+                                      HelperText="e.g. ChangeRequest. Blank means any. Applies to this version only." />
+                    }
+                </MudItem>
+                <MudItem xs="12" md="8">
+                    <MudSelect T="Guid?" @bind-Value="_model.EntryTaskLocalId"
+                               Label="Entry task" Variant="Variant.Outlined" Required="true"
+                               HelperText="Where a new run starts.">
+                        @foreach (var t in _model.Tasks.Where(t => !t.IsAdHoc))
+                        {
+                            <MudSelectItem T="Guid?" Value="@t.LocalId">@t.Label</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+
+            <MudStack Row="true" Spacing="2" Class="mt-3" AlignItems="AlignItems.Center">
+                @if (_model.IsPublished)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        Saving a published version creates a new draft.
+                    </MudText>
+                }
+                <MudSpacer />
+                <MudButton StartIcon="@Icons.Material.Filled.Checklist" OnClick="Validate">Validate</MudButton>
+                <MudButton StartIcon="@Icons.Material.Filled.Save" OnClick="Save">Save draft</MudButton>
+                <MudButton StartIcon="@Icons.Material.Filled.Publish" Color="Color.Primary"
+                           Variant="Variant.Filled" OnClick="Publish">Publish</MudButton>
+            </MudStack>
+        </MudPaper>
+
+        @if (_published)
+        {
+            <MudAlert Severity="Severity.Success" Dense="true">
+                Published as version @_model.Version. Runs already in flight stay on the version
+                they started with.
+            </MudAlert>
+        }
+
+        @if (_errors.Count > 0)
+        {
+            <MudAlert Severity="Severity.Error">
+                <MudText Typo="Typo.subtitle2">This workflow is not valid yet</MudText>
+                <MudList T="string" Dense="true">
+                    @* The same problem can be reported by both the client's structural
+                       checks and the definition validator, with different codes and identical
+                       wording. Both are deliberate; showing the sentence twice just reads as
+                       a bug, so display de-duplicates by message rather than by code. *@
+                    @foreach (var e in _errors.DistinctBy(e => e.Message))
+                    {
+                        <MudListItem T="string" Icon="@Icons.Material.Filled.Error">
+                            <b>@e.Code</b> — @e.Message
+                        </MudListItem>
+                    }
+                </MudList>
+            </MudAlert>
+        }
+        else if (_validated)
+        {
+            <MudAlert Severity="Severity.Success" Dense="true">No problems found.</MudAlert>
+        }
+
+        <WorkflowDiagram Model="_model" Revision="_revision" />
+
+        <WorkflowTestPane VersionId="@_model.VersionId" ActorId="@ActorId" />
+
+        <MudStack Row="true" AlignItems="AlignItems.Center">
+            <MudText Typo="Typo.h6">Tasks</MudText>
+            <MudSpacer />
+            <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddTask">Add task</MudButton>
+        </MudStack>
+
+        @foreach (var task in _model.Tasks)
+        {
+            <MudPaper Class="pa-3" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.subtitle1"><b>@task.Label</b></MudText>
+
+                    @if (_model.EntryTaskLocalId == task.LocalId)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">entry</MudChip>
+                    }
+                    @if (task.IsTerminal)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Dark">terminal</MudChip>
+                    }
+                    @if (task.IsAdHoc)
+                    {
+                        <MudChip T="string" Size="Size.Small">ad-hoc</MudChip>
+                    }
+                    @if (task.IsForkable)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">forkable</MudChip>
+                    }
+                    @if (task.IsConvergencePoint)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">convergence</MudChip>
+                    }
+                    @if (task.IsBlocking)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary">blocking</MudChip>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(task.AssignmentRoleKey))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                            @task.AssignmentRoleKey
+                        </MudChip>
+                    }
+
+                    <MudSpacer />
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                   OnClick="@(() => EditTask(task))" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                   OnClick="@(() => RemoveTask(task))" />
+                </MudStack>
+
+                <MudGrid Class="mt-2">
+                    <MudItem xs="12" md="6">
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.subtitle2">Routes</MudText>
+                            <MudSpacer />
+                            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                                       Disabled="@task.IsTerminal"
+                                       OnClick="@(() => AddRoute(task))">Add</MudButton>
+                        </MudStack>
+
+                        @if (task.Routes.Count == 0)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @(task.IsTerminal ? "Terminal tasks have no routes." : "No routes yet.")
+                            </MudText>
+                        }
+                        else
+                        {
+                            @foreach (var route in task.Routes)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudChip T="string" Size="Size.Small">@route.OutcomeKey</MudChip>
+                                    <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" />
+                                    <MudText Typo="Typo.body2">
+                                        @(_model.Find(route.NextTaskLocalId ?? Guid.Empty)?.Label ?? "—")
+                                    </MudText>
+                                    @if (route.IsReworkRoute)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">rework</MudChip>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(route.ConditionKey))
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                            @route.ConditionKey
+                                        </MudChip>
+                                    }
+                                    <MudSpacer />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                   OnClick="@(() => EditRoute(task, route))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   OnClick="@(() => task.Routes.Remove(route))" />
+                                </MudStack>
+                            }
+                        }
+                    </MudItem>
+
+                    <MudItem xs="12" md="6">
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.subtitle2">Triggers</MudText>
+                            <MudSpacer />
+                            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                                       OnClick="@(() => AddTrigger(task))">Add</MudButton>
+                        </MudStack>
+
+                        @if (task.Triggers.Count == 0)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">No triggers.</MudText>
+                        }
+                        else
+                        {
+                            @foreach (var trigger in task.Triggers.OrderBy(t => t.Order))
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudText Typo="Typo.body2">@DescriptorName(trigger.TriggerKey)</MudText>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                        @trigger.Event
+                                    </MudChip>
+                                    <MudChip T="string" Size="Size.Small"
+                                             Color="@(trigger.DispatchMode == TaskRouter.Core.Model.TriggerDispatchMode.InTransaction ? Color.Default : Color.Info)">
+                                        @trigger.DispatchMode
+                                    </MudChip>
+                                    @if (!trigger.IsActive)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Dark">inactive</MudChip>
+                                    }
+                                    <MudSpacer />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                   OnClick="@(() => EditTrigger(task, trigger))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   OnClick="@(() => task.Triggers.Remove(trigger))" />
+                                </MudStack>
+                            }
+                        }
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        }
+
+        @*
+            A version-level panel rather than a sub-list on each task, for two reasons.
+            It matches the panel-per-scope layout above -- attachments belong to this
+            version exactly as routes and triggers do. And an attachment scoped to "any
+            task" has nowhere sensible to sit in a per-task UI: it would have to be
+            repeated under every task, or hidden somewhere the author never looks.
+        *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
+                <MudText Typo="Typo.subtitle2">Sub-workflows</MudText>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">this version</MudChip>
+                <MudSpacer />
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                           Disabled="@(_subWorkflows.Count == 0)"
+                           OnClick="AddAttachment">Attach</MudButton>
+            </MudStack>
+
+            @if (_subWorkflows.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Nothing is flagged as a reusable sub-workflow yet, so there is nothing
+                    to attach.
+                </MudText>
+            }
+            else if (_model.SubWorkflows.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Nothing attached. A sub-workflow hands a short chain of work to
+                    somebody else and, if it blocks, holds the parent task until it is done.
+                </MudText>
+            }
+            else
+            {
+                <MudTable Items="_model.SubWorkflows" Dense="true" Elevation="0" Hover="true">
+                    <HeaderContent>
+                        <MudTh>Sub-workflow</MudTh>
+                        <MudTh>Scope</MudTh>
+                        <MudTh>Spawn</MudTh>
+                        <MudTh>Blocking</MudTh>
+                        <MudTh />
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Sub-workflow">@SubWorkflowName(context.SubWorkflowDefinitionId)</MudTd>
+                        <MudTd DataLabel="Scope">@ScopeLabel(context)</MudTd>
+                        <MudTd DataLabel="Spawn">@(context.IsAutomatic ? "automatic" : "on request")</MudTd>
+                        <MudTd DataLabel="Blocking">@(context.IsBlocking ? "yes" : "no")</MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                           OnClick="@(() => EditAttachment(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                           OnClick="@(() => RemoveAttachment(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </MudStack>
+}
+
+@code {
+    [Parameter] public int VersionId { get; set; }
+    [Parameter] public EventCallback<int> OnPublished { get; set; }
+
+    /// <summary>Who test runs are performed as. A host with authentication passes the
+    /// signed-in user.</summary>
+    [Parameter] public string ActorId { get; set; } = "tester";
+
+    private WorkflowEditModel? _model;
+    private IReadOnlyList<TaskTypeOption> _taskTypes = [];
+
+    /// <summary>
+    /// The outcomes an author may give a task. Empty leaves the outcome editor as free text,
+    /// which is what it was before there was a catalogue — and is the honest state for a
+    /// database where nobody has defined one yet.
+    /// </summary>
+    private IReadOnlyList<OutcomeTypeOption> _outcomeTypes = [];
+    private IReadOnlyList<TriggerDescriptor> _descriptors = [];
+    private IReadOnlyList<string> _roles = [];
+    private IReadOnlyList<string> _subjectTypes = [];
+    private IReadOnlyList<string> _conditions = [];
+    private IReadOnlyList<SubWorkflowDefinitionOption> _subWorkflows = [];
+
+    // Passed explicitly at every ShowAsync rather than left to MudDialogProvider: a host sets
+    // that for its own screens, and without options an edit form inherits it. One real host
+    // runs FullWidth with MaxWidth.False, which stretched a three-field route form across the
+    // window.
+
+    /// <summary>A short form — a route, an attachment.</summary>
+    private static readonly DialogOptions NarrowDialog =
+        new() { MaxWidth = MaxWidth.Small, FullWidth = true };
+
+    /// <summary>A form with many fields, or a generated one whose length is not known here.</summary>
+    private static readonly DialogOptions WideDialog =
+        new() { MaxWidth = MaxWidth.Large, FullWidth = true };
+
+    private List<ValidationError> _errors = [];
+    private bool _validated;
+    private bool _published;
+
+    /// <summary>
+    /// Bumped on every edit. The model is mutated in place rather than replaced, so
+    /// the diagram has no other way to know it needs redrawing.
+    /// </summary>
+    private int _revision;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _model = await Client.GetWorkflowAsync(VersionId);
+        _taskTypes = await Client.GetTaskTypesAsync();
+        _descriptors = await Client.GetTriggerDescriptorsAsync();
+        _roles = await Client.GetAssignmentRolesAsync();
+        _outcomeTypes = await Client.GetOutcomeTypesAsync();
+        _subjectTypes = await Client.GetSubjectTypesAsync();
+        _conditions = await Client.GetRouteConditionsAsync();
+        _subWorkflows = await Client.GetSubWorkflowDefinitionsAsync();
+
+        Reorder();
+    }
+
+    /// <summary>
+    /// Puts the tasks in roughly the order a run would meet them. Safe to do at any
+    /// time: routes target local ids, so list position carries no meaning.
+    /// </summary>
+    private void Reorder()
+    {
+        if (_model is not null)
+        {
+            WorkflowLayout.ApplyOrder(_model);
+        }
+    }
+
+    private string DescriptorName(string key) =>
+        _descriptors.FirstOrDefault(d => d.Key == key)?.DisplayName ?? key;
+
+    private IReadOnlyDictionary<string, string> TaskOptions =>
+        _model?.Tasks.ToDictionary(t => t.LocalId.ToString(), t => t.Label)
+        ?? new Dictionary<string, string>();
+
+    private async Task AddTask()
+    {
+        var model = new TaskEditModel();
+        await ShowTaskDialog(model, isNew: true);
+    }
+
+    private async Task EditTask(TaskEditModel task) => await ShowTaskDialog(task, isNew: false);
+
+    private async Task ShowTaskDialog(TaskEditModel model, bool isNew)
+    {
+        var parameters = new DialogParameters<TaskEditDialog>
+        {
+            { x => x.Model, model },
+            { x => x.TaskTypes, _taskTypes },
+            { x => x.Roles, _roles },
+            { x => x.OutcomeTypes, _outcomeTypes }
+        };
+
+        var dialog = await Dialogs.ShowAsync<TaskEditDialog>(
+            isNew ? "Add task" : "Edit task", parameters, WideDialog);
+
+        var result = await dialog.Result;
+
+        // Task types and outcomes can be created or retired from inside that dialog, and
+        // both are saved immediately -- so these lists are stale as soon as one is.
+        // Refreshed whether the dialog was saved or cancelled: the rows exist either way.
+        _taskTypes = await Client.GetTaskTypesAsync();
+        _outcomeTypes = await Client.GetOutcomeTypesAsync();
+
+        if (result is { Canceled: false } && isNew)
+        {
+            _model!.Tasks.Add(model);
+            _model.EntryTaskLocalId ??= model.IsAdHoc ? null : model.LocalId;
+        }
+
+        Invalidate();
+    }
+
+    private void RemoveTask(TaskEditModel task)
+    {
+        // Remove inbound routes too, or the workflow is left referencing a task that
+        // no longer exists.
+        foreach (var other in _model!.Tasks)
+        {
+            other.Routes.RemoveAll(r => r.NextTaskLocalId == task.LocalId);
+        }
+
+        _model.Tasks.Remove(task);
+
+        if (_model.EntryTaskLocalId == task.LocalId)
+        {
+            _model.EntryTaskLocalId = _model.Tasks.FirstOrDefault(t => !t.IsAdHoc)?.LocalId;
+        }
+
+        Invalidate();
+    }
+
+    private async Task AddRoute(TaskEditModel task)
+    {
+        var route = new RouteEditModel();
+        await ShowRouteDialog(task, route, isNew: true);
+    }
+
+    private async Task EditRoute(TaskEditModel task, RouteEditModel route) =>
+        await ShowRouteDialog(task, route, isNew: false);
+
+    private async Task ShowRouteDialog(TaskEditModel task, RouteEditModel route, bool isNew)
+    {
+        var parameters = new DialogParameters<RouteEditDialog>
+        {
+            { x => x.Model, route },
+            { x => x.Outcomes, task.Outcomes },
+            { x => x.Targets, _model!.Tasks.Where(t => t.LocalId != task.LocalId).ToList() },
+            { x => x.Conditions, _conditions }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RouteEditDialog>(
+            isNew ? "Add route" : "Edit route", parameters, NarrowDialog);
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false } && isNew)
+        {
+            task.Routes.Add(route);
+        }
+
+        Invalidate();
+    }
+
+    private async Task AddTrigger(TaskEditModel task)
+    {
+        var trigger = new TriggerEditModel { Order = task.Triggers.Count + 1 };
+        await ShowTriggerDialog(task, trigger, isNew: true);
+    }
+
+    private async Task EditTrigger(TaskEditModel task, TriggerEditModel trigger) =>
+        await ShowTriggerDialog(task, trigger, isNew: false);
+
+    private async Task ShowTriggerDialog(TaskEditModel task, TriggerEditModel trigger, bool isNew)
+    {
+        var parameters = new DialogParameters<TriggerEditDialog>
+        {
+            { x => x.Model, trigger },
+            { x => x.Descriptors, _descriptors },
+            { x => x.TaskOptions, TaskOptions },
+            { x => x.RoleOptions, _roles }
+        };
+
+        var dialog = await Dialogs.ShowAsync<TriggerEditDialog>(
+            isNew ? "Add trigger" : "Edit trigger", parameters, WideDialog);
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false } && isNew)
+        {
+            task.Triggers.Add(trigger);
+        }
+
+        Invalidate();
+    }
+
+    private string SubWorkflowName(int definitionId) =>
+        _subWorkflows.FirstOrDefault(s => s.DefinitionId == definitionId)?.Name
+        ?? $"#{definitionId}";
+
+    /// <summary>
+    /// Version-wide attachments read as "any task" rather than as a blank, because a
+    /// null target is a real choice here and not a missing one.
+    /// </summary>
+    private string ScopeLabel(SubWorkflowAttachmentEditModel attachment) =>
+        attachment.TaskLocalId is { } localId
+            ? _model?.Find(localId)?.Label ?? "(missing task)"
+            : "any task";
+
+    private async Task AddAttachment()
+    {
+        var attachment = new SubWorkflowAttachmentEditModel();
+        await ShowAttachmentDialog(attachment, isNew: true);
+    }
+
+    private async Task EditAttachment(SubWorkflowAttachmentEditModel attachment) =>
+        await ShowAttachmentDialog(attachment, isNew: false);
+
+    private void RemoveAttachment(SubWorkflowAttachmentEditModel attachment)
+    {
+        _model!.SubWorkflows.Remove(attachment);
+        Invalidate();
+    }
+
+    private async Task ShowAttachmentDialog(
+        SubWorkflowAttachmentEditModel attachment, bool isNew)
+    {
+        var parameters = new DialogParameters<SubWorkflowAttachDialog>
+        {
+            { x => x.Model, attachment },
+            { x => x.Available, _subWorkflows },
+
+            // Ad-hoc tasks are excluded, as they are from the entry-task picker: they
+            // sit outside the routed graph. They are not cut off from sub-workflows --
+            // an attachment scoped to "any task" is offered on every task, ad-hoc included.
+            { x => x.Tasks, _model!.Tasks.Where(t => !t.IsAdHoc).ToList() }
+        };
+
+        var dialog = await Dialogs.ShowAsync<SubWorkflowAttachDialog>(
+            isNew ? "Attach a sub-workflow" : "Edit attachment", parameters, NarrowDialog);
+
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false } && isNew)
+        {
+            _model.SubWorkflows.Add(attachment);
+        }
+
+        Invalidate();
+    }
+
+    private void Invalidate()
+    {
+        Reorder();
+
+        _validated = false;
+        _published = false;
+        _errors = [];
+        _revision++;
+        StateHasChanged();
+    }
+
+    private async Task Validate()
+    {
+        _errors = [.. await Client.ValidateAsync(_model!)];
+        _validated = true;
+        _published = false;
+    }
+
+    private async Task Save()
+    {
+        var result = await Client.SaveAsync(_model!);
+        _errors = [.. result.Errors];
+        _validated = true;
+        _published = false;
+
+        if (result.Success)
+        {
+            _model = await Client.GetWorkflowAsync(result.VersionId);
+            Reorder();
+            _revision++;
+        }
+    }
+
+    private async Task Publish()
+    {
+        var result = await Client.PublishAsync(_model!);
+        _errors = [.. result.Errors];
+        _validated = true;
+
+        if (result.Success)
+        {
+            _published = true;
+            _model = await Client.GetWorkflowAsync(result.VersionId);
+            Reorder();
+            _revision++;
+            await OnPublished.InvokeAsync(result.VersionId);
+        }
+    }
+}

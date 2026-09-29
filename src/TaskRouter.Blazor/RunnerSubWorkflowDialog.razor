@@ -1,0 +1,124 @@
+@using TaskRouter.Core.Runner
+
+@*  Starts a reusable sub-workflow against a task. Only what the workflow declared as
+    attachable to this task is offered -- the engine refuses anything else, since where
+    a sub-workflow may hang is configuration rather than a runtime choice. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:420px;">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Starting a sub-workflow under <b>@ParentLabel</b>.
+            </MudText>
+
+            @if (Options.All(o => !o.CanStart))
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    Everything attachable here is already running.
+                </MudAlert>
+            }
+
+            <MudSelect T="int" @bind-Value="_definitionId" Label="Sub-workflow"
+                       Variant="Variant.Outlined">
+                @foreach (var option in Options.Where(o => o.CanStart))
+                {
+                    <MudSelectItem T="int" Value="@option.SubWorkflowDefinitionId">
+                        @option.Name @(option.IsBlocking ? "(blocking)" : "")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            @*  The org unit first, because it is the part that decides the chain.
+
+                Every role inside a sub-workflow -- its reviews, its approvals -- resolves
+                against the unit the chain belongs to. Until this picker existed the unit
+                came from whoever was named, so delegating to a person meant silently
+                delegating to their section, and delegating to nobody meant inheriting the
+                parent's. Defaults to the parent's, which is what it used to do. *@
+            <MudSelect T="string" @bind-Value="_assignToBranchKey" Label="Org unit"
+                       Variant="Variant.Outlined" Clearable="true"
+                       HelperText="Every review inside the sub-workflow resolves against this unit.">
+                @foreach (var unit in OrgUnits)
+                {
+                    <MudSelectItem T="string" Value="@unit.Key">@unit.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @*  Optional on purpose: handing a chain to a section with nobody named yet is
+                how work reaches a section's queue for somebody there to pick up. *@
+            <MudSelect T="string" @bind-Value="_assignToActorId" Label="Assign to (optional)"
+                       Variant="Variant.Outlined" Clearable="true"
+                       HelperText="Leave blank to hand it to the unit rather than a person.">
+                @foreach (var actor in Actors)
+                {
+                    <MudSelectItem T="string" Value="@actor.ActorId">@actor.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (Selected is { IsBlocking: true })
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    <b>@ParentLabel</b> cannot be completed until this finishes.
+                </MudAlert>
+            }
+
+            <MudTextField T="string" @bind-Value="_notes" Label="Notes" Lines="2"
+                          Variant="Variant.Outlined" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Start</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string ParentLabel { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<SubWorkflowOptionView> Options { get; set; } = [];
+    [Parameter] public IReadOnlyList<ActorOption> Actors { get; set; } = [];
+    [Parameter] public IReadOnlyList<BranchOption> OrgUnits { get; set; } = [];
+
+    /// <summary>
+    /// The parent task's org unit, which the picker starts on. A sub-workflow most often
+    /// stays in the unit that spawned it, and inheriting is what happened before the picker
+    /// existed — so the default preserves the old behaviour rather than changing it quietly.
+    /// </summary>
+    [Parameter] public string? CurrentBranchKey { get; set; }
+
+    private int _definitionId;
+    private string? _assignToActorId;
+    private string? _assignToBranchKey;
+    private string? _notes;
+    private string? _error;
+
+    private SubWorkflowOptionView? Selected =>
+        Options.FirstOrDefault(o => o.SubWorkflowDefinitionId == _definitionId);
+
+    protected override void OnInitialized()
+    {
+        _definitionId = Options.FirstOrDefault(o => o.CanStart)?.SubWorkflowDefinitionId ?? 0;
+
+        // Only when the directory still lists it. Starting on a unit that no longer exists
+        // would hand the chain to nothing.
+        _assignToBranchKey = OrgUnits.Any(u => u.Key == CurrentBranchKey) ? CurrentBranchKey : null;
+    }
+
+    private void Save()
+    {
+        if (_definitionId == 0)
+        {
+            _error = "Choose a sub-workflow.";
+            return;
+        }
+
+        Dialog.Close(DialogResult.Ok(new WorkflowRunner.SubWorkflowRequest(
+            _definitionId, _assignToActorId, _assignToBranchKey, _notes)));
+    }
+}

@@ -1,0 +1,95 @@
+@page "/"
+@page "/workflows"
+
+@inject IWorkflowBuilderClient Client
+@inject NavigationManager Nav
+
+<PageTitle>Workflows</PageTitle>
+
+<MudStack Spacing="4">
+    <MudStack Row="true" AlignItems="AlignItems.Center">
+        <MudText Typo="Typo.h5" HtmlTag="h1">Workflows</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Add"
+                   OnClick="@(() => Nav.NavigateTo("/workflows/new"))">New workflow</MudButton>
+    </MudStack>
+
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        One row per version. Runs pin to the version they started on, so a published
+        version is never edited in place — saving over one forks a new draft.
+    </MudText>
+
+    @if (_summaries is null)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (_summaries.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">No workflows yet.</MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_summaries" Dense="true" Hover="true" Elevation="1">
+            <HeaderContent>
+                <MudTh>Workflow</MudTh>
+                <MudTh>Subject type</MudTh>
+                <MudTh>Version</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Tasks</MudTh>
+                <MudTh />
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Workflow">
+                    @context.Name
+                    @if (context.IsSubWorkflow)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                                 Variant="Variant.Outlined" Class="ml-2">sub-workflow</MudChip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Subject type">
+                    @(context.IsSubWorkflow ? "—" : context.SubjectType ?? "any")
+                </MudTd>
+                <MudTd DataLabel="Version">@context.Version</MudTd>
+                <MudTd DataLabel="Status">
+                    <MudChip T="string" Size="Size.Small"
+                             Color="@(context.IsPublished ? Color.Success : Color.Default)">
+                        @(context.IsPublished ? "published" : "draft")
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="Tasks">@context.TaskCount</MudTd>
+                <MudTd>
+                    <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                        <MudButton Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Edit"
+                                   OnClick="@(() => Open(context.VersionId))">
+                            @(context.IsPublished ? "View" : "Edit")
+                        </MudButton>
+                        @if (context.IsPublished)
+                        {
+                            <MudButton Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.ContentCopy"
+                                       OnClick="@(() => NewDraft(context.VersionId))">New draft</MudButton>
+                        }
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudStack>
+
+@code {
+    private List<WorkflowSummary>? _summaries;
+
+    protected override async Task OnInitializedAsync() =>
+        _summaries = [.. await Client.GetWorkflowsAsync()];
+
+    private void Open(int versionId) => Nav.NavigateTo($"/workflows/{versionId}");
+
+    private async Task NewDraft(int versionId)
+    {
+        var draftId = await Client.CreateDraftVersionAsync(versionId);
+        Nav.NavigateTo($"/workflows/{draftId}");
+    }
+}

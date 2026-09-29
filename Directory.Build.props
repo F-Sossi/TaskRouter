@@ -1,0 +1,22 @@
+<Project>
+
+  <!-- Shared identity for everything in the repo. Packaging itself is opted into
+       by src/Directory.Build.props; samples and tests inherit IsPackable=false. -->
+  <PropertyGroup>
+    <Authors>Frank Sossi</Authors>
+    <Copyright>Copyright (c) 2026 Frank Sossi</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/F-Sossi/TaskRouter</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/F-Sossi/TaskRouter</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Pre-1.0 on purpose: the public API stays free to move until the first
+       real integration has stressed every seam. -->
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>preview.1</VersionSuffix>
+  </PropertyGroup>
+
+</Project>

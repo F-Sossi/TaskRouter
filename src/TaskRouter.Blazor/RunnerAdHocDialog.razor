@@ -1,0 +1,57 @@
+@using TaskRouter.Core.Runner
+
+@*  Adds a task the workflow declared as ad-hoc. The options come from the run's own
+    pinned version, so a workflow edited since the run started cannot offer tasks that
+    version never had. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Adding under <b>@ParentLabel</b>.
+            </MudText>
+
+            <MudSelect T="int" @bind-Value="_taskDefinitionId" Label="Task"
+                       Variant="Variant.Outlined" Required="true">
+                @foreach (var option in Options)
+                {
+                    <MudSelectItem T="int" Value="@option.TaskDefinitionId">@option.Label</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField T="string" @bind-Value="_notes" Label="Notes" Lines="2"
+                          Variant="Variant.Outlined" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Add</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string ParentLabel { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<AdHocOption> Options { get; set; } = [];
+
+    private int _taskDefinitionId;
+    private string? _notes;
+    private string? _error;
+
+    private void Save()
+    {
+        if (_taskDefinitionId == 0)
+        {
+            _error = "Choose a task.";
+            return;
+        }
+
+        Dialog.Close(DialogResult.Ok(new WorkflowRunner.AdHocRequest(_taskDefinitionId, _notes)));
+    }
+}

@@ -1,0 +1,63 @@
+@using TaskRouter.Core.Runner
+
+@*  Adds branches to a fork that has not converged yet -- work that turns out to involve
+    a unit nobody thought of when the fork was created. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:400px;">
+            @if (Branches.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    Every unit is already part of this fork.
+                </MudAlert>
+            }
+            else
+            {
+                <MudSelect T="string" MultiSelection="true" @bind-SelectedValues="_selected"
+                           Label="Add branches" Variant="Variant.Outlined"
+                           HelperText="They join the existing fork and must finish before it converges.">
+                    @foreach (var branch in Branches)
+                    {
+                        <MudSelectItem T="string" Value="@branch.Key">@branch.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+
+            <MudTextField T="string" @bind-Value="_notes" Label="Notes" Lines="2"
+                          Variant="Variant.Outlined" />
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Add</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public IReadOnlyList<BranchOption> Branches { get; set; } = [];
+
+    private IReadOnlyCollection<string> _selected = [];
+    private string? _notes;
+    private string? _error;
+
+    private void Save()
+    {
+        var keys = _selected.ToList();
+
+        if (keys.Count == 0)
+        {
+            _error = "Choose at least one branch.";
+            return;
+        }
+
+        Dialog.Close(DialogResult.Ok(new WorkflowRunner.AddBranchRequest(keys, _notes)));
+    }
+}
