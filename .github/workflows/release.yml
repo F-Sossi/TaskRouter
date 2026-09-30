@@ -11,6 +11,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
 
+    # Trusted Publishing: the workflow asks GitHub for a short-lived OIDC token, nuget.org
+    # verifies it against a policy naming this repository and this workflow file, and hands
+    # back an API key good for an hour. Nothing long-lived is stored anywhere, so there is
+    # no key to leak, rotate, or forget to revoke when somebody leaves.
+    permissions:
+      id-token: write   # let GitHub mint the OIDC token
+      contents: read
+
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -56,13 +64,23 @@ jobs:
       - name: Pack
         run: dotnet pack TaskRouter.slnx --configuration Release --no-build --output ./artifacts
 
+      # Immediately before the push, not earlier: the key expires after an hour, and the
+      # test run above is the slowest part of this job.
+      - name: Exchange the OIDC token for a short-lived nuget.org key
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          # The nuget.org profile name, not an email address. A secret rather than a
+          # literal only to keep the account name out of logs; it is not itself sensitive.
+          user: ${{ secrets.NUGET_USER }}
+
       # --skip-duplicate so a re-run after a partial failure finishes the job instead of
       # failing on the packages that already went up. Four packages push separately and
       # there is no transaction across them.
       - name: Push to nuget.org
         run: |
           dotnet nuget push "./artifacts/*.nupkg" \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
