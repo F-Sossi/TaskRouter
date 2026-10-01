@@ -1,20 +1,29 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-09-30**: TaskRouter is **published on nuget.org** and the host
-consumes it as packages. Before that, pre-assignment and a second day of driving the host
+context. Last updated **2026-09-30 (evening)**: `0.1.0-preview.3` is **published on
+nuget.org** and the host builds, tests and runs against it with no version override. Before
+that, pre-assignment and a second day of driving the host
 application. Before that, the type-registry work, and a round of feedback
 from somebody using it. Before that: shipping the runner and inbox, and acting on what the
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
 
-**Where the session ended (2026-09-30):** `main` is the only branch, clean, 0 warnings,
-463/463 green. **Published**: `0.1.0-preview.1` of all four packages is on nuget.org.
+**Where the session ended (2026-09-30, evening):** `main` is clean and pushed, 0 warnings,
+464/464 green. **Published: `0.1.0-preview.3`** of all four packages, verified against the
+registry rather than against a green CI run. The host consumes it with no
+`-p:TaskRouterVersion=` override: 0 warnings, 2,179 tests green across its five suites.
+
+`0.1.0-preview.2` does not exist on nuget.org and never will. Its release run died on a
+nuget.org read-only 503, and by the time that could be retried the tag pointed at a commit
+older than the fixes worth shipping — so the work went out as `preview.3` rather than
+force-pushing a public tag onto different content. **The stale `v0.1.0-preview.2` tag is
+still on GitHub**, pointing at a commit that was never published; delete it if the tags
+should match the registry.
 
 This repository was started fresh at publication — the development history before that is
 kept privately, because it was written while working inside the first host and names it
-throughout. The four packages carry full NuGet metadata and pack, at
-`0.1.0-preview.1`. Nothing has been pushed to GitHub or published to nuget.org.
+throughout.
 
 **Where 2026-09-03 ended: `docs/superpowers/plans/2026-09-02-builder-over-http.md` is
 complete, all five tasks. 361/361, 0 warnings.** The builder now works from both hosting
@@ -322,7 +331,55 @@ Found by driving the host against the real packages, and **all three are in
    it loads its own copy of Mermaid; the sample, which does not, is where it shows.
 3. **The diagram had no colour**, only shape.
 
-All three are fixed here and want a **`0.1.0-preview.2`**.
+All three were fixed, and shipped in **`0.1.0-preview.3`** along with the defects below.
+
+### What `0.1.0-preview.3` fixed — 2026-09-30
+
+1. **Testing a draft made it permanently unpublishable.** The one that matters. Saving a
+   draft rewrites its graph from scratch, and `ClearGraphAsync` assumed nothing could
+   reference the rows it deletes — the comment said so: *"published versions never reach
+   here"*. Test runs break that assumption. They pin to the draft, and their tasks point at
+   the very task definitions the rewrite destroys, so the save failed on a foreign key and
+   surfaced as a 500 with no way back for that draft.
+
+   A draft's test runs are now discarded before the rewrite, which is the only coherent
+   answer available: a re-save mints new task definition ids, so the run has nothing left to
+   point at and no sense in which it still runs that workflow. The teardown is the one
+   `DeleteTestRunAsync` already had, extracted to `TestRunTeardown` rather than duplicated —
+   its ordering is load-bearing and there should be one copy. A non-test run reaching that
+   path throws instead of deleting anything.
+
+   Found from the host, reproduced against the real database, and pinned by
+   `A_draft_that_has_been_tried_out_can_still_be_saved_and_published`.
+
+2. **The diagram fought Mermaid's stock themes.** `dark` and `default` ship opposite
+   palettes, so the diagram changed character with the page. It now uses `theme: 'base'`
+   with an explicit palette, as the first host's own `mermaidInterop.js` did.
+
+   The division that matters, and the one that caused the two follow-up bugs: **anything
+   drawn on a node follows the node; anything drawn on the page follows the theme.** Node
+   fills are saturated with white labels — the one combination that survives being generated
+   in `WorkflowMermaid.cs`, where the theme is unknown — and ordinary steps take the
+   application's own primary so the diagram belongs to the page it is on. Lines and edge
+   labels follow the theme and so live in `workflowDiagram.js`, where `dark` is known.
+
+   Pale fills with dark text were tried first and are a trap: they look clean on a dark page
+   and vanish on a light one. Then edge labels came out white-on-white in light mode, because
+   Mermaid styles node and edge labels with a *single* rule —
+   `.label text, span { fill: nodeTextColor }` — and `nodeTextColor` falls back to
+   `primaryTextColor`, which is white here for the node fills. Classed nodes override it;
+   edge labels have no class. `nodeTextColor` is now set explicitly and tracks the page.
+
+3. **The pre-assignment row rule broke mid-table.** The cell carried `d-flex` on a `<td>`,
+   which takes it out of table layout; on a row whose step cannot be pre-assigned that cell
+   is empty, so it collapsed and took the row's rule with it. The flex box moved to a `div`
+   inside the cell.
+
+**A caution for any future UI review: Dark Reader is installed in the browser.** It rewrites
+colours *and* reports its own substitutions as the computed style, so a page can look wrong
+and measure wrong while the code is right. It cost a full misdiagnosis of the diagram here —
+the conclusion that Mermaid's `classDef color:` is inert for SVG labels was wrong. Judge
+colour in a clean profile.
 
 ## Which of the builder's types could be data — 2026-09-16
 
@@ -399,10 +456,9 @@ works under either answer, which is why it was written first. Its two decisions:
 Nothing is blocking a host any more; what is left is publication and two features.
 
 1. ~~**CI, SourceLink, symbol packages**, the GitHub repository and the first publish.~~
-   **Done 2026-09-30.** What is left of this track is **cutting `0.1.0-preview.2`**, which
-   three fixes are waiting on — see the section above. Tag `v0.1.0-preview.2`; nothing else is
-   needed. The old text: the API surface is settled, and both of the
-   breaking changes that were waiting have been taken.
+   ~~**Cut the next preview.**~~ **Both done 2026-09-30.** `0.1.0-preview.3` is on nuget.org
+   and the host consumes it unpinned. This track is finished; releasing is now just
+   bump `VersionSuffix`, tag `v<version>`, and let `release.yml` do the rest.
 2. **Document transaction composition.** `WorkflowTransaction` already behaves correctly under
    a host-owned transaction and nothing says so; the joined path leaves
    `IWorkflowPostCommitActions` to the caller, which a host will not guess.
