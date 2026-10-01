@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 using DemoDocuments.Server.Domain;
 using DemoDocuments.Server.Workflow;
@@ -38,7 +39,17 @@ public class RunnerClientTests
 
         _builder = new EfWorkflowBuilderClient(
             _host.Db,
-            new WorkflowTriggerRegistry([new SetVariableTrigger(), new ReportProgressTrigger()]),
+            // The full set the demo seeder actually uses, DemoEscalationTrigger included.
+            // A narrower registry makes the builder reject the *seeded* graph with
+            // TRIGGER_UNKNOWN -- the validator working correctly on a fixture that lied.
+            new WorkflowTriggerRegistry(
+            [
+                new SetVariableTrigger(),
+                new ReportProgressTrigger(),
+                new NotifyTrigger(),
+                new WebhookTrigger(),
+                new DemoEscalationTrigger(_host.Db, NullLogger<DemoEscalationTrigger>.Instance)
+            ]),
             [new RequiresReviewCondition()],
             new WorkflowBuilderOptions
             {
@@ -87,6 +98,39 @@ public class RunnerClientTests
 
         Assert.IsTrue(result.IsError, "starting real work on an unapproved draft must be refused");
         StringAssert.Contains(result.UnwrapError().Message, "draft");
+    }
+
+    [TestMethod]
+    public async Task A_draft_that_has_been_tried_out_can_still_be_saved_and_published()
+    {
+        // Reported from the builder as "it will not let me publish". Trying a draft out
+        // leaves a test run pinned to it, and that run's tasks point at the draft's task
+        // definitions -- the very rows a re-save deletes before rewriting the graph. So the
+        // act of testing a draft made it unpublishable, with a 500 as the only signal.
+        var draftId = await _builder.CreateDraftVersionAsync(await PublishedVersionIdAsync());
+
+        var started = await _client.StartTestRunAsync(draftId, "tester");
+        Assert.IsTrue(started.Success, started.Error);
+
+        Assert.IsTrue(
+            await _host.Db.WorkflowTasks.AnyAsync(t => t.WorkflowRunId == started.RunId),
+            "the test run must have produced a task for this to be the case under test");
+
+        var model = await _builder.GetWorkflowAsync(draftId)
+            ?? throw new InvalidOperationException("the draft vanished");
+
+        var saved = await _builder.SaveAsync(model);
+        Assert.IsTrue(saved.Success, string.Join("; ", saved.Errors.Select(e => e.Code)));
+
+        model.VersionId = saved.VersionId;
+        var published = await _builder.PublishAsync(model);
+        Assert.IsTrue(published.Success, string.Join("; ", published.Errors.Select(e => e.Code)));
+
+        // The stale run goes with the graph it was exercising: its task definitions no
+        // longer exist, so there is nothing left for it to mean.
+        Assert.IsFalse(
+            await _host.Db.WorkflowRuns.AnyAsync(r => r.Id == started.RunId),
+            "the test run should have been discarded, not left dangling");
     }
 
     [TestMethod]

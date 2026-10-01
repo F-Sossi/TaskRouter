@@ -109,14 +109,28 @@ public static class WorkflowMermaid
         }
 
         // Explicit fills rather than leaning on Mermaid's own theme, because the diagram
-        // has to stay legible on a light page and a dark one, and the source is generated
-        // here where the theme is not known. Mid-tone fills with light labels read on both.
-        sb.AppendLine("    classDef step fill:#37474f,stroke:#78909c,color:#eceff1;");
-        sb.AppendLine("    classDef entry fill:#2e7d32,stroke:#66bb6a,color:#ffffff;");
-        sb.AppendLine("    classDef terminal fill:#4527a0,stroke:#9575cd,color:#ffffff;");
-        sb.AppendLine("    classDef convergence fill:#ef6c00,stroke:#ffb74d,color:#ffffff;");
-        sb.AppendLine("    classDef forkable fill:#1565c0,stroke:#64b5f6,color:#ffffff;");
-        sb.AppendLine("    classDef adhoc fill:#37474f,stroke:#b0bec5,color:#eceff1,stroke-dasharray: 5 5;");
+        // has to stay legible on a light page and a dark one and the source is generated
+        // here, where the theme is not known.
+        //
+        // Saturated mid-tone fills with white labels, which is the one combination that
+        // survives not knowing: a solid card reads against a white page and a near-black
+        // one alike. Pale fills with dark text were tried and are a trap — they look
+        // clean on a dark page and vanish on a light one.
+        //
+        // The ordinary step takes the application's own primary, so the diagram belongs
+        // to the page it is drawn on, and the rest are tuned to sit beside that purple at
+        // the same weight. Hue is the vocabulary: green starts, deep indigo ends, blue
+        // splits, amber rejoins. Entry and terminal take a heavier stroke as well,
+        // because where a graph begins and ends is the first thing a reader looks for.
+        sb.AppendLine("    classDef step fill:#776BE7,stroke:#594AE2,color:#ffffff;");
+        sb.AppendLine("    classDef entry fill:#2E9E6B,stroke:#23805A,color:#ffffff,stroke-width:2px;");
+        sb.AppendLine("    classDef terminal fill:#3D3184,stroke:#2E2566,color:#ffffff,stroke-width:2px;");
+        sb.AppendLine("    classDef convergence fill:#C9711C,stroke:#A25A13,color:#ffffff;");
+        sb.AppendLine("    classDef forkable fill:#2D7FF0,stroke:#1E63C4,color:#ffffff;");
+
+        // Muted and dashed: an optional step should recede rather than compete with the
+        // path that always runs.
+        sb.AppendLine("    classDef adhoc fill:#5A5570,stroke:#8A84A8,color:#ffffff,stroke-dasharray: 5 5;");
 
         return sb.ToString();
     }

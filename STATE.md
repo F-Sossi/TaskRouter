@@ -981,6 +981,19 @@ excluding `wwwroot/lib`, whose minified vendor code matches almost any short str
 
 The remaining smaller candidates are:
 
+- **Duplicate a workflow.** Requested 2026-09-30 from the host. Two real uses, and they
+  want different things: copying a workflow *for another section*, where the graph is the
+  same and the assignments differ, and reusing one *on a different document type*, where
+  `SubjectType` changes and the assignments may not. Today the only way to get a second
+  workflow shaped like an existing one is to rebuild it task by task.
+
+  `CreateDraftVersionAsync` already deep-copies a version's whole graph, so the copying
+  is solved; what is missing is copying into a **new definition** rather than a new
+  version of the same one — a new `WorkflowDefinition` row, name supplied by the caller,
+  version numbering restarted, and the copy landing as an unpublished draft. Worth
+  settling at the same time: whether a duplicate carries its triggers and sub-workflow
+  attachments (it should) and its pre-assignments (it should not — those name people).
+
 - **Timers as a workflow primitive** — "wait 10 days, then advance on your own". Durable
   suspend/resume, and a different feature from a deadline: a deadline nags a human, a
   timer moves the run. The largest thing left on the roadmap.

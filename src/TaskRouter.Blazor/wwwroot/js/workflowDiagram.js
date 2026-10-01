@@ -48,10 +48,41 @@ export async function render(element, id, source, dark) {
     try {
         const mermaid = await loadMermaid();
 
+        // theme 'base' rather than 'dark'/'default', because those two ship opposite
+        // palettes and the diagram then changes character with the page. 'base' imposes
+        // nothing, so what follows is the whole palette -- and the node fills, which are
+        // generated server-side where the theme is unknown, are saturated with white
+        // labels precisely so they read against either of these backgrounds.
+        //
+        // Only the connective tissue is theme-dependent: lines and edge labels sit on the
+        // page, not on a node, so they are the one part that has to know.
         mermaid.initialize({
             startOnLoad: false,
             securityLevel: 'strict',
-            theme: dark ? 'dark' : 'default',
+            theme: 'base',
+            themeVariables: {
+                background: 'transparent',
+                fontFamily: 'Segoe UI, Roboto, Helvetica, Arial, sans-serif',
+                fontSize: '14px',
+
+                // The app's own primary, so the diagram belongs to the page it is on.
+                primaryColor: '#776BE7',
+                primaryBorderColor: '#594AE2',
+                primaryTextColor: '#ffffff',
+
+                lineColor: dark ? '#b0b0b0' : '#6b7280',
+                textColor: dark ? '#e8e8ef' : '#1f2430',
+                edgeLabelBackground: dark ? '#262633' : '#f0f0f0',
+
+                // Must track the page, not the nodes. Mermaid styles node labels and
+                // edge labels with one rule -- `.label text, span { fill: nodeTextColor }`
+                // -- and nodeTextColor otherwise falls back to primaryTextColor, which is
+                // white here so labels read on the saturated fills. The nodes keep that
+                // white through their own classDef, which is more specific; the edge
+                // labels have no class, so they took the fallback and came out white on
+                // the light edgeLabelBackground above -- invisible on a light page.
+                nodeTextColor: dark ? '#e8e8ef' : '#1f2430'
+            },
             flowchart: { useMaxWidth: true, htmlLabels: false }
         });
 

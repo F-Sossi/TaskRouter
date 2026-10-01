@@ -6,6 +6,7 @@ using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
 using TaskRouter.Core.Model;
 using TaskRouter.Core.Validation;
+using TaskRouter.EntityFrameworkCore.Runner;
 using TaskRouter.EntityFrameworkCore.Triggers;
 
 namespace TaskRouter.EntityFrameworkCore.Builder;
@@ -769,11 +770,15 @@ public sealed class EfWorkflowBuilderClient(
     /// <summary>
     /// Empties a draft version's graph so it can be rewritten from the model.
     ///
-    /// Safe only because published versions never reach here: runs pin to a version, so
-    /// deleting task definitions out from under one would orphan in-flight tasks.
+    /// Safe for real work only because published versions never reach here: runs pin to a
+    /// version, so deleting task definitions out from under one would orphan in-flight
+    /// tasks. Test runs are the exception, and they are discarded below rather than
+    /// protected — see <see cref="DiscardTestRunsAsync"/>.
     /// </summary>
     private async Task ClearGraphAsync(WorkflowDefinitionVersion version, CancellationToken ct)
     {
+        await DiscardTestRunsAsync(version, ct).ConfigureAwait(false);
+
         // Drop the entry reference first, or deleting the task it points at fails.
         version.EntryTaskDefinitionId = null;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -807,6 +812,40 @@ public sealed class EfWorkflowBuilderClient(
         version.Tasks.Clear();
 
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Discards any test run against this draft, because the graph underneath it is about
+    /// to be rewritten.
+    ///
+    /// Trying a draft out leaves a run pinned to the draft version, and that run's tasks
+    /// reference the very task definitions the rewrite deletes. Without this, the act of
+    /// testing a draft made it permanently unsaveable and unpublishable, and the only
+    /// signal was a 500 from a foreign key.
+    ///
+    /// The run cannot be salvaged: a re-save mints new task definition ids, so there is
+    /// nothing left for its tasks to point at and no sense in which it is still a run of
+    /// this workflow. It goes with the graph it was exercising. Published versions never
+    /// reach here, so this can never touch real work — but assert it anyway, because the
+    /// cost of being wrong is deleting somebody's tasks.
+    /// </summary>
+    private async Task DiscardTestRunsAsync(WorkflowDefinitionVersion version, CancellationToken ct)
+    {
+        var runs = await db.WorkflowRuns
+            .Where(r => r.WorkflowDefinitionVersionId == version.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        foreach (var run in runs)
+        {
+            if (!run.IsTest)
+            {
+                throw new InvalidOperationException(
+                    $"Run {run.Id} is real work on version {version.Id}, which is being " +
+                    "rewritten. A published version should never have reached this path.");
+            }
+
+            await TestRunTeardown.DiscardAsync(db, run, ct).ConfigureAwait(false);
+        }
     }
 
     // ───────────────────────────────── Mapping ─────────────────────────────────

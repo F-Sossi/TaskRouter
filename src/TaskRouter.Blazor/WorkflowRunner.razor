@@ -214,15 +214,22 @@
                                                     <MudText Typo="Typo.caption" Class="mud-text-secondary">&mdash;</MudText>
                                                 }
                                             </td>
-                                            <td class="d-flex justify-end">
-                                                @if (step.CanPreAssign)
-                                                {
-                                                    <MudButton Size="Size.Small" Variant="Variant.Text"
-                                                               Disabled="@_busy"
-                                                               OnClick="@(() => PreAssign(step))">
-                                                        @(step.PreAssignedActorId is null ? "Assign" : "Change")
-                                                    </MudButton>
-                                                }
+                                            @*  The flex box goes on a div inside the cell, never on the
+                                                cell itself: display:flex takes a <td> out of table layout,
+                                                and a row whose step cannot be pre-assigned has nothing in
+                                                here at all -- so the cell collapsed and took the row's
+                                                rule with it, leaving the divider broken mid-table. *@
+                                            <td>
+                                                <div class="d-flex justify-end">
+                                                    @if (step.CanPreAssign)
+                                                    {
+                                                        <MudButton Size="Size.Small" Variant="Variant.Text"
+                                                                   Disabled="@_busy"
+                                                                   OnClick="@(() => PreAssign(step))">
+                                                            @(step.PreAssignedActorId is null ? "Assign" : "Change")
+                                                        </MudButton>
+                                                    }
+                                                </div>
                                             </td>
                                         </tr>
                                     }
