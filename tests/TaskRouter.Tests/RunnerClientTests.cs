@@ -857,6 +857,41 @@ public class RunnerClientTests
     }
 
     [TestMethod]
+    public async Task A_test_run_with_a_delegated_chain_can_still_be_discarded()
+    {
+        // Reported as a 500 from the builder's test pane. Discarding a test run cascades to
+        // its tasks, and a sub-workflow instance points at the task it hangs off with
+        // DeleteBehavior.Restrict -- so the moment somebody tried a delegation in the test
+        // pane, that run became undeletable and the only signal was a 500.
+        var started = await _client.StartTestRunAsync(await PublishedVersionIdAsync(), "tester");
+
+        var entry = (await _client.GetRunAsync(started.RunId, "tester"))!.Tasks.Single();
+        await _client.CompleteAsync(entry.Id, "approved", "tester", null);
+
+        var parent = (await _client.GetRunAsync(started.RunId, "tester"))!
+            .Tasks.First(t => t.HasSubWorkflowOptions);
+
+        var subWorkflowId = await _host.Db.WorkflowDefinitions
+            .Where(d => d.IsSubWorkflow).Select(d => d.Id).SingleAsync();
+
+        var delegated = await _client.StartSubWorkflowAsync(
+            parent.Id, subWorkflowId, "tester", null, null, null);
+
+        Assert.IsTrue(delegated.Success, delegated.Error);
+
+        var discarded = await _client.DeleteTestRunAsync(started.RunId, "tester");
+
+        Assert.IsTrue(discarded.Success, discarded.Error);
+
+        Assert.IsFalse(
+            await _host.Db.WorkflowRuns.AnyAsync(r => r.Id == started.RunId),
+            "The run survived, so the test pane leaves rows behind for every delegation.");
+        Assert.IsFalse(
+            await _host.Db.WorkflowSubWorkflowInstances.AnyAsync(i => i.WorkflowRunId == started.RunId),
+            "Its instances outlived it.");
+    }
+
+    [TestMethod]
     public async Task A_delegated_task_says_which_chain_it_belongs_to()
     {
         // A sub-workflow's tasks live in the same run as the task that spawned them, so

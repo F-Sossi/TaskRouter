@@ -60,10 +60,23 @@ public static class WorkflowMermaid
 
             sb.Append("    ").AppendLine(node);
 
-            if (task.IsAdHoc)
+            // Colour as well as shape, and the same meaning in both. Shape alone asks a
+            // reader to know that a hexagon forks and a parallelogram converges; colour
+            // tells them which nodes are alike before they have learned the vocabulary.
+            //
+            // Ad-hoc wins where a task is both, because "this step is optional" changes how
+            // to read the whole path through it.
+            var kind = true switch
             {
-                sb.Append("    ").Append(id).AppendLine(":::adhoc");
-            }
+                _ when task.IsAdHoc => "adhoc",
+                _ when isEntry => "entry",
+                _ when task.IsTerminal => "terminal",
+                _ when task.IsConvergencePoint => "convergence",
+                _ when task.IsForkable => "forkable",
+                _ => "step"
+            };
+
+            sb.Append("    ").Append(id).Append(":::").AppendLine(kind);
         }
 
         foreach (var task in tasks)
@@ -95,7 +108,15 @@ public static class WorkflowMermaid
             }
         }
 
-        sb.AppendLine("    classDef adhoc stroke-dasharray: 5 5;");
+        // Explicit fills rather than leaning on Mermaid's own theme, because the diagram
+        // has to stay legible on a light page and a dark one, and the source is generated
+        // here where the theme is not known. Mid-tone fills with light labels read on both.
+        sb.AppendLine("    classDef step fill:#37474f,stroke:#78909c,color:#eceff1;");
+        sb.AppendLine("    classDef entry fill:#2e7d32,stroke:#66bb6a,color:#ffffff;");
+        sb.AppendLine("    classDef terminal fill:#4527a0,stroke:#9575cd,color:#ffffff;");
+        sb.AppendLine("    classDef convergence fill:#ef6c00,stroke:#ffb74d,color:#ffffff;");
+        sb.AppendLine("    classDef forkable fill:#1565c0,stroke:#64b5f6,color:#ffffff;");
+        sb.AppendLine("    classDef adhoc fill:#37474f,stroke:#b0bec5,color:#eceff1,stroke-dasharray: 5 5;");
 
         return sb.ToString();
     }

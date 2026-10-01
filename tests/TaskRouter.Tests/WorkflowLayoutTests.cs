@@ -178,6 +178,62 @@ public class WorkflowLayoutTests
     }
 
     [TestMethod]
+    public void Each_task_role_is_coloured_as_well_as_shaped()
+    {
+        // Shape alone asks a reader to know that a hexagon forks and a parallelogram
+        // converges. Colour tells them which nodes are alike before they have learned the
+        // vocabulary, so every node carries a class and every class has a fill.
+        var entry = Task("entry");
+        var fork = Task("fork");
+        var converge = Task("converge");
+        var close = Task("close", terminal: true);
+        var optional = Task("optional");
+
+        fork.IsForkable = true;
+        converge.IsConvergencePoint = true;
+        optional.IsAdHoc = true;
+
+        var model = new WorkflowEditModel
+        {
+            Name = "Coloured",
+            EntryTaskLocalId = entry.LocalId,
+            Tasks = [entry, fork, converge, close, optional]
+        };
+
+        var chart = WorkflowMermaid.ToFlowchart(model);
+
+        foreach (var kind in new[] { "entry", "forkable", "convergence", "terminal", "adhoc" })
+        {
+            StringAssert.Contains(chart, $":::{kind}", $"no node was classed {kind}");
+            StringAssert.Contains(chart, $"classDef {kind} fill:", $"{kind} has no fill");
+        }
+
+        // Ad-hoc wins where a task is both: "this step is optional" changes how to read the
+        // whole path through it. Counted rather than matched by node id, which is positional
+        // over a computed order and none of this test's business.
+        optional.IsForkable = true;
+        var both = WorkflowMermaid.ToFlowchart(model);
+
+        Assert.AreEqual(1, Occurrences(both, ":::adhoc\n"),
+            "The task that is both should be classed once, as ad-hoc.");
+        Assert.AreEqual(1, Occurrences(both, ":::forkable\n"),
+            "Only the genuinely forkable task is, so ad-hoc did not lose the tie.");
+    }
+
+    private static int Occurrences(string text, string value)
+    {
+        var count = 0;
+
+        for (var i = text.IndexOf(value, StringComparison.Ordinal); i >= 0;
+             i = text.IndexOf(value, i + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    [TestMethod]
     public void A_label_that_would_break_the_parser_is_escaped()
     {
         var task = Task("odd", terminal: true);

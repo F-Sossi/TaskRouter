@@ -5,7 +5,11 @@
 // it rather than importing it. That keeps the vendored file usable as-is, with no
 // bundler step in the build.
 
-const MERMAID_SRC = '_content/Workflow.MudBlazor/lib/mermaid/mermaid.min.js';
+// The package's own name. This said Workflow.MudBlazor until 2026-09-30, left behind by
+// the rename -- so the script 404'd and the diagram fell back to showing its source. It
+// went unnoticed because the first host loads a copy of Mermaid itself, which sets
+// globalThis.mermaid before this module ever looks.
+const MERMAID_SRC = '_content/TaskRouter.Blazor/lib/mermaid/mermaid.min.js';
 
 let loading = null;
 
