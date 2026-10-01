@@ -135,6 +135,13 @@ internal static class BuilderEndpoints
             WorkflowEditModel body, [FromServices] IWorkflowBuilderClient client, CancellationToken ct) =>
             Results.Ok(await client.PublishAsync(body, ct).ConfigureAwait(false)));
 
+        builder.MapPost("/workflows/{fromVersionId:int}/duplicate", async (
+            int fromVersionId, DuplicateWorkflowRequest body,
+            [FromServices] IWorkflowBuilderClient client, CancellationToken ct) =>
+            Results.Ok(await client
+                .DuplicateWorkflowAsync(fromVersionId, body.NewName, ct)
+                .ConfigureAwait(false)));
+
         builder.MapPost("/workflows/{fromVersionId:int}/draft", async (
             int fromVersionId, [FromServices] IWorkflowBuilderClient client, CancellationToken ct) =>
             Results.Ok(await client
@@ -152,3 +159,7 @@ internal static class BuilderEndpoints
 public sealed record CreateTaskTypeRequest(string Key, string DisplayName);
 
 public sealed record CreateOutcomeTypeRequest(string Key, string DisplayName);
+
+/// <summary>The new workflow's name, which is free text and so travels in a body rather
+/// than the route.</summary>
+public sealed record DuplicateWorkflowRequest(string NewName);

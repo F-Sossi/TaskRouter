@@ -1,0 +1,68 @@
+@*  Names the copy before it is made.
+
+    A duplicate is a separate workflow, and the only thing distinguishing it from its
+    source in a list is its name -- so the name is asked for up front rather than left to
+    be fixed afterwards, which would mean a window where two identical names are on screen
+    and nobody can tell which row is which.
+
+    The suggested name is the source's with a suffix, because the common case is a variant
+    of the original rather than an unrelated workflow -- starting from the full name is
+    less typing than starting from an empty box. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width:420px">
+
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Copies every step, route and trigger of <b>@SourceName</b> into a new
+                workflow. The copy starts as an unpublished draft, so nothing runs on it
+                until you publish it, and editing it never affects the original.
+            </MudText>
+
+            <MudTextField T="string" @bind-Value="_name" Label="Name for the copy"
+                          Variant="Variant.Outlined" AutoFocus="true" Immediate="true"
+                          Error="@(_touched && string.IsNullOrWhiteSpace(_name))"
+                          ErrorText="A copy needs a name of its own."
+                          OnKeyDown="@OnKeyDown" />
+
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   Disabled="@string.IsNullOrWhiteSpace(_name)"
+                   OnClick="Confirm">Duplicate</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    /// <summary>The workflow being copied. Shown, and the basis for the suggested name.</summary>
+    [Parameter] public string SourceName { get; set; } = string.Empty;
+
+    private string? _name;
+    private bool _touched;
+
+    protected override void OnInitialized() => _name = $"{SourceName} (copy)";
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key is "Enter")
+        {
+            Confirm();
+        }
+    }
+
+    private void Confirm()
+    {
+        _touched = true;
+
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            return;
+        }
+
+        Dialog.Close(DialogResult.Ok(_name.Trim()));
+    }
+}

@@ -128,6 +128,22 @@ public sealed class HttpWorkflowBuilderClient(HttpClient http, string prefix = "
         return await response.Content.ReadFromJsonAsync<int>(ct).ConfigureAwait(false);
     }
 
+    public async Task<int> DuplicateWorkflowAsync(
+        int fromVersionId, string newName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            // Rejected here as well as server-side, so the WebAssembly host fails the same
+            // way the in-process one does rather than on a 400 from somewhere else.
+            throw new ArgumentException(
+                "A duplicate needs a name of its own.", nameof(newName));
+        }
+
+        return await PostAsync<DuplicateWorkflowBody, int>(
+            $"{_root}/workflows/{fromVersionId}/duplicate",
+            new DuplicateWorkflowBody(newName), ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// A read that must produce a value.
     ///
@@ -175,4 +191,9 @@ public sealed class HttpWorkflowBuilderClient(HttpClient http, string prefix = "
 
     /// <inheritdoc cref="CreateTaskTypeBody"/>
     private sealed record CreateOutcomeTypeBody(string Key, string DisplayName);
+
+    /// <inheritdoc cref="CreateTaskTypeBody"/>
+    /// <remarks>The name travels in a body rather than the route: it is free text a person
+    /// typed, so it would need escaping in a path and would show up in server logs.</remarks>
+    private sealed record DuplicateWorkflowBody(string NewName);
 }
