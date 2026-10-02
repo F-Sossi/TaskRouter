@@ -137,6 +137,28 @@ public class HttpBuilderClientTests
     }
 
     [TestMethod]
+    public async Task A_workflow_can_be_duplicated_over_HTTP()
+    {
+        // This is what keeps DuplicateWorkflowBody and DuplicateWorkflowRequest honest.
+        // They are declared separately so the Blazor package need not reference
+        // ASP.NET Core, and nothing but a round trip against the real server would catch
+        // them drifting apart -- a renamed property would simply deserialise as null.
+        var summaries = await _client.GetWorkflowsAsync();
+        var source = summaries[0];
+
+        var name = $"Duplicated {Guid.NewGuid():N}";
+        var copyId = await _client.DuplicateWorkflowAsync(source.VersionId, name);
+
+        var copy = (await _client.GetWorkflowAsync(copyId))!;
+
+        Assert.AreEqual(name, copy.Name, "the name did not survive the body round trip");
+        Assert.AreNotEqual(source.DefinitionId, copy.DefinitionId,
+            "a duplicate is a new workflow, not a new version");
+        Assert.IsFalse(copy.IsPublished);
+        Assert.IsNotEmpty(copy.Tasks, "the graph did not come across");
+    }
+
+    [TestMethod]
     public async Task A_draft_can_be_published_over_HTTP()
     {
         var summaries = await _client.GetWorkflowsAsync();

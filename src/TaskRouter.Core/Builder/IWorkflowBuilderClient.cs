@@ -102,6 +102,26 @@ public interface IWorkflowBuilderClient
 
     /// <summary>Creates a new draft version copied from an existing one.</summary>
     Task<int> CreateDraftVersionAsync(int fromVersionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Copies a version's whole graph onto a <b>new workflow</b> under a new name, and
+    /// returns the new draft version's id.
+    ///
+    /// <para>The difference from <see cref="CreateDraftVersionAsync"/> is which thing is
+    /// new. That makes another <em>version</em> of the same workflow, so publishing it
+    /// supersedes what came before and every run follows the new rules. This makes a
+    /// separate <em>workflow</em>: versioned from 1, published independently, and editable
+    /// without touching the original or the runs pinned to it.</para>
+    ///
+    /// <para>Everything version-scoped comes across — tasks, outcomes, routes, triggers and
+    /// sub-workflow attachments — with freshly minted ids throughout. Pre-assignments do
+    /// not, because they hang off a run rather than a version; there is nothing to copy.
+    /// The copy always lands unpublished, whatever the source was.</para>
+    /// </summary>
+    /// <param name="newName">Name for the new workflow. Required: the two are otherwise
+    /// indistinguishable in a list, which is where somebody has to pick between them.</param>
+    Task<int> DuplicateWorkflowAsync(
+        int fromVersionId, string newName, CancellationToken ct = default);
 }
 
 public sealed record SaveResult(

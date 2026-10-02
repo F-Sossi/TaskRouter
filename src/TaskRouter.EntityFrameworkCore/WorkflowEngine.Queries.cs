@@ -207,6 +207,9 @@ public sealed partial class WorkflowEngine
                 definition,
                 assignment ?? new WorkflowAssignment(parent.AssignedToActorId, parent.AssignedBranchKey),
                 parent.ToSnapshot(),
+                // Raising an ad-hoc task against a named person is a decision; falling
+                // back to the parent's assignee is not.
+                assignment is not null ? AssignmentOrigin.Explicit : AssignmentOrigin.Inherited,
                 token).ConfigureAwait(false);
 
             var task = await NewTaskAsync(parent.WorkflowRunId, definition, resolved, actorId, now, token).ConfigureAwait(false);

@@ -265,7 +265,19 @@ public static class WorkflowModelBuilderExtensions
 
             // Assigned-work lookups ("my open tasks") are the most common query in a
             // task-driven system, so index for them explicitly.
-            e.HasIndex(x => new { x.AssignedToActorId, x.Status });
+            //
+            // Filtered to the open statuses for the same reason as the two sweeper indexes
+            // below: the inbox only ever asks for NotStarted or InProgress, and a task that
+            // completes leaves the set permanently. Unfiltered, this index grew with every
+            // task the system had ever run while the query only wanted the live head of it
+            // -- so its size tracked total history rather than outstanding work.
+            //
+            // The ordinals are spelled out because a filter cannot name the enum.
+            // SchemaGuardTests pins them; reordering WorkflowTaskStatus without updating
+            // both would leave the index in place and silently change what it covers,
+            // which shows up as an inbox that quietly stops using it.
+            e.HasIndex(x => new { x.AssignedToActorId, x.Status })
+             .HasFilter("[Status] IN (0, 1)");
 
             // The sweeper's candidate set: open, not yet reminded, configured to nudge.
             // Filtered on ReminderSentAt because the interesting rows are the ones that

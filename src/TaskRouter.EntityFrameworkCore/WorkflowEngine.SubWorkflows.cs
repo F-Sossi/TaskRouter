@@ -220,6 +220,9 @@ public sealed partial class WorkflowEngine
             entryDef,
             requested ?? new WorkflowAssignment(parent.AssignedToActorId, parent.AssignedBranchKey),
             parent.ToSnapshot(),
+            // Delegating to a named person is the whole mechanism -- see the comment
+            // above -- so a requested assignment must survive regardless of the setting.
+            requested is not null ? AssignmentOrigin.Explicit : AssignmentOrigin.Inherited,
             ct).ConfigureAwait(false);
 
         var task = await NewTaskAsync(parent.WorkflowRunId, entryDef, assignment, actorId, now, ct).ConfigureAwait(false);

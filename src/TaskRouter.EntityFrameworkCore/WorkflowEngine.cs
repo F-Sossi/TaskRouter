@@ -185,6 +185,9 @@ public sealed partial class WorkflowEngine(
                 entryDef,
                 initialAssignment ?? new WorkflowAssignment(actorId, null),
                 null,
+                // The caller named it, or the historical default named the starter. Either
+                // way somebody decided, so carry-forward has no say over the entry task.
+                AssignmentOrigin.Explicit,
                 token,
                 run.Id).ConfigureAwait(false);
 
@@ -297,6 +300,9 @@ public sealed partial class WorkflowEngine(
                 nextDef,
                 new WorkflowAssignment(task.AssignedToActorId, task.AssignedBranchKey),
                 task.ToSnapshot(),
+                // Nobody chose this -- it is simply whoever held the step just completed.
+                // The case the setting exists for.
+                AssignmentOrigin.Inherited,
                 ct,
                 task.ForkGroupId.HasValue ? 0 : task.WorkflowRunId).ConfigureAwait(false);
 
@@ -382,6 +388,8 @@ public sealed partial class WorkflowEngine(
             convergenceDef,
             new WorkflowAssignment(source.AssignedToActorId, source.AssignedBranchKey),
             source.ToSnapshot(),
+            // Inherited from whoever owned the task the fork started at.
+            AssignmentOrigin.Inherited,
             ct,
             task.WorkflowRunId).ConfigureAwait(false);
 
@@ -772,6 +780,7 @@ public sealed partial class WorkflowEngine(
         WorkflowTaskDefinition definition,
         WorkflowAssignment current,
         WorkflowTaskSnapshot? task,
+        AssignmentOrigin origin,
         CancellationToken ct,
         int runId = 0)
     {
@@ -798,7 +807,28 @@ public sealed partial class WorkflowEngine(
 
         if (string.IsNullOrWhiteSpace(definition.AssignmentRoleKey))
         {
-            return current;
+            // No role, so `current` is the answer -- but only if somebody meant it.
+            //
+            // An Explicit assignment was chosen for this task by a person or a caller:
+            // delegating a sub-workflow, adding an ad-hoc task to somebody, starting a
+            // run on a named actor, returning a rejected branch to whoever worked it.
+            // Those are decisions and are always honoured.
+            //
+            // An Inherited one is just whatever the previous task happened to hold, and
+            // that is what the workflow's own policy governs. Off by default: the step
+            // arrives unassigned and waits in its section rather than silently landing on
+            // whoever finished the one before it.
+            if (origin is AssignmentOrigin.Explicit)
+            {
+                return current;
+            }
+
+            // The org unit is kept either way. The inbox offers unclaimed work only to
+            // members of the task's own unit (WorkflowEngine.Inbox.cs), so dropping the
+            // unit as well would hide the task from everybody -- work lost, not waiting.
+            return await CarriesAssignmentForwardAsync(definition, ct).ConfigureAwait(false)
+                ? current
+                : current with { ActorId = null };
         }
 
         // Unlike the original engine (finding M8), a resolver failure is logged rather than silently
@@ -835,6 +865,35 @@ public sealed partial class WorkflowEngine(
     /// Threading a subject parameter through those seven call sites would reintroduce
     /// exactly the per-site burden the funnel exists to remove.
     /// </summary>
+    private readonly Dictionary<int, bool> _carryForwardByVersion = [];
+
+    /// <summary>
+    /// Whether this definition's version carries an assignee forward onto steps that name
+    /// nobody. Memoised per version for the same reason as
+    /// <see cref="_subjectsByRun"/>: the engine is scoped, completing one task can create
+    /// several, and the flag cannot change underneath a published version.
+    /// </summary>
+    private async Task<bool> CarriesAssignmentForwardAsync(
+        WorkflowTaskDefinition definition, CancellationToken ct)
+    {
+        var versionId = definition.WorkflowDefinitionVersionId;
+
+        if (_carryForwardByVersion.TryGetValue(versionId, out var cached))
+        {
+            return cached;
+        }
+
+        var carry = await db.WorkflowDefinitionVersions
+            .AsNoTracking()
+            .Where(v => v.Id == versionId)
+            .Select(v => v.CarryAssignmentForward)
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        _carryForwardByVersion[versionId] = carry;
+        return carry;
+    }
+
     private readonly Dictionary<int, WorkflowSubject> _subjectsByRun = [];
 
     private async Task<WorkflowSubject?> SubjectForRunAsync(int runId, CancellationToken ct)

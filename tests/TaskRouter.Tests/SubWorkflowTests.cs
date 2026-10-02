@@ -671,7 +671,7 @@ public class SubWorkflowTests
     }
 
     [TestMethod]
-    public async Task Delegating_without_an_assignment_still_inherits_the_parent()
+    public async Task Delegating_without_an_assignment_inherits_the_section_but_nobody()
     {
         var instance = (await _host.Engine.StartSubWorkflowAsync(
             _parentTaskId, _subWorkflowId, "user-originator")).Unwrap();
@@ -681,9 +681,20 @@ public class SubWorkflowTests
 
         var parent = await _host.Db.WorkflowTasks.SingleAsync(t => t.Id == _parentTaskId);
 
-        // Unchanged behaviour when nobody is named — this is not a regression surface.
+        // The section still flows down the delegation -- that is what lets the roled steps
+        // below the entry resolve at all, and it is the half of this that is load-bearing.
         Assert.AreEqual(parent.AssignedBranchKey, entry.AssignedBranchKey);
-        Assert.AreEqual(parent.AssignedToActorId, entry.AssignedToActorId);
+
+        // The person does not. Delegating without naming anybody names nobody, so the
+        // workflow's CarryAssignmentForward setting decides, and it is off by default:
+        // the chain starts as unclaimed work in the section rather than silently landing
+        // on whoever happened to hold the parent task.
+        //
+        // This assertion used to be the opposite, guarding the delegation feature against
+        // changing the no-name case. That fallback is what AssignmentCarryForwardTests now
+        // covers and what this release deliberately changes; naming somebody on the
+        // delegation still overrides it, which the two tests above pin.
+        Assert.IsNull(entry.AssignedToActorId);
     }
 
     /// <summary>

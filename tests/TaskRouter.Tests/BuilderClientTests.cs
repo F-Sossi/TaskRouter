@@ -461,6 +461,104 @@ public class BuilderClientTests
         Assert.IsFalse(copy.Tasks.Any(t => originalIds.Contains(t.Id)));
     }
 
+    [TestMethod]
+    public async Task Duplicate_copies_the_graph_onto_a_new_workflow_under_a_new_name()
+    {
+        // The ask this came from: one team wants the same process with a step moved, and
+        // rebuilding it by hand is the only alternative. So a duplicate is a separate
+        // workflow -- its own definition, versioned from 1, editable without touching the
+        // original -- and not another version of the one it came from, which is what
+        // CreateDraftVersionAsync already does.
+        var sourceId = await SeededVersionIdAsync();
+        var original = (await _client.GetWorkflowAsync(sourceId))!;
+
+        var copyId = await _client.DuplicateWorkflowAsync(sourceId, "Document Review (East)");
+        var copy = (await _client.GetWorkflowAsync(copyId))!;
+
+        Assert.AreNotEqual(original.DefinitionId, copy.DefinitionId,
+            "a duplicate is a new workflow, not a new version of the old one");
+        Assert.AreEqual("Document Review (East)", copy.Name);
+        Assert.AreEqual(1, copy.Version, "a new workflow starts at version 1");
+        Assert.IsFalse(copy.IsPublished, "the copy is a draft until somebody publishes it");
+
+        // The whole graph, or duplicating saves nobody any work.
+        Assert.HasCount(original.Tasks.Count, copy.Tasks);
+        Assert.AreEqual(
+            original.Tasks.SelectMany(t => t.Routes).Count(),
+            copy.Tasks.SelectMany(t => t.Routes).Count());
+        Assert.AreEqual(
+            original.Tasks.SelectMany(t => t.Outcomes).Count(),
+            copy.Tasks.SelectMany(t => t.Outcomes).Count());
+        Assert.AreEqual(
+            original.Tasks.SelectMany(t => t.Triggers).Count(),
+            copy.Tasks.SelectMany(t => t.Triggers).Count());
+        Assert.HasCount(original.SubWorkflows.Count, copy.SubWorkflows);
+        Assert.AreEqual(original.SubjectType, copy.SubjectType);
+        Assert.IsNotNull(copy.EntryTaskLocalId, "the copy keeps its entry point");
+
+        // Freshly minted rows throughout. Sharing a task definition would let an edit to
+        // the copy reach runs of the original -- the whole point of copying.
+        var originalTaskIds = original.Tasks.Select(t => t.Id).ToHashSet();
+        Assert.IsFalse(copy.Tasks.Any(t => originalTaskIds.Contains(t.Id)));
+
+        // And the original is untouched, still published, still at its own version.
+        var sourceAfter = (await _client.GetWorkflowAsync(sourceId))!;
+        Assert.AreEqual(original.Name, sourceAfter.Name);
+        Assert.IsTrue(sourceAfter.IsPublished);
+        Assert.HasCount(original.Tasks.Count, sourceAfter.Tasks);
+    }
+
+    [TestMethod]
+    public async Task Duplicate_requires_a_name_of_its_own()
+    {
+        // Two workflows with one name is the state this feature would otherwise create by
+        // default, and the list offers no other way to tell them apart.
+        var sourceId = await SeededVersionIdAsync();
+
+        await Assert.ThrowsExactlyAsync<ArgumentException>(
+            () => _client.DuplicateWorkflowAsync(sourceId, "   "));
+    }
+
+    [TestMethod]
+    public async Task The_carry_forward_rule_round_trips_through_a_save()
+    {
+        // Version-scoped settings are the ones a save quietly drops: the UI binds them,
+        // the model carries them, and if the persist path does not copy them back the
+        // switch simply does not stick -- with nothing to see but a toggle that resets.
+        var draftId = await _client.CreateDraftVersionAsync(await SeededVersionIdAsync());
+
+        var model = (await _client.GetWorkflowAsync(draftId))!;
+        Assert.IsFalse(model.CarryAssignmentForward, "off is the default");
+
+        model.CarryAssignmentForward = true;
+        var saved = await _client.SaveAsync(model);
+        Assert.IsTrue(saved.Success, string.Join("; ", saved.Errors.Select(e => e.Code)));
+
+        var reloaded = (await _client.GetWorkflowAsync(saved.VersionId))!;
+        Assert.IsTrue(reloaded.CarryAssignmentForward, "the switch did not survive the save");
+
+        // And back off again, so the test cannot pass on a field that is only ever set.
+        reloaded.CarryAssignmentForward = false;
+        var off = await _client.SaveAsync(reloaded);
+
+        Assert.IsFalse((await _client.GetWorkflowAsync(off.VersionId))!.CarryAssignmentForward);
+    }
+
+    [TestMethod]
+    public async Task A_duplicate_keeps_the_carry_forward_rule()
+    {
+        // A duplicate that silently reverted a business rule to the default would be a
+        // trap: the copy looks like the original everywhere the eye checks.
+        var draftId = await _client.CreateDraftVersionAsync(await SeededVersionIdAsync());
+        var model = (await _client.GetWorkflowAsync(draftId))!;
+        model.CarryAssignmentForward = true;
+        var saved = await _client.SaveAsync(model);
+
+        var copyId = await _client.DuplicateWorkflowAsync(saved.VersionId, "Carries Forward Copy");
+
+        Assert.IsTrue((await _client.GetWorkflowAsync(copyId))!.CarryAssignmentForward);
+    }
+
     // ──────────────────────── Sub-workflow attachment scope ────────────────────────
 
     // WorkflowDefinitionValidator.Validate early-returns WF_EMPTY for a version with no

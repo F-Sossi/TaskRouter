@@ -480,6 +480,37 @@ public sealed class EfWorkflowBuilderClient(
         return await PersistAsync(model, ct).ConfigureAwait(false);
     }
 
+    public async Task<int> DuplicateWorkflowAsync(
+        int fromVersionId, string newName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            throw new ArgumentException(
+                "A duplicate needs a name of its own.", nameof(newName));
+        }
+
+        var model = await GetWorkflowAsync(fromVersionId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Workflow version {fromVersionId} not found.");
+
+        // Clearing *both* ids is the whole difference from CreateDraftVersionAsync: with
+        // no definition id, PersistCoreAsync mints a new WorkflowDefinition and numbers
+        // its first version 1, so the copy is a separate workflow rather than the next
+        // version of this one.
+        //
+        // Everything else rides along untouched. The edit model already carries the full
+        // version-scoped graph -- tasks, outcomes, routes, triggers, sub-workflow
+        // attachments -- and PersistCoreAsync creates fresh rows for all of it regardless
+        // of the ids it is handed, wiring routes to outcomes by object reference. So the
+        // stale database ids left on the model are inert, and the copy shares no row with
+        // its source.
+        model.DefinitionId = 0;
+        model.VersionId = 0;
+        model.Name = newName.Trim();
+        model.IsPublished = false;
+
+        return await PersistAsync(model, ct).ConfigureAwait(false);
+    }
+
     // ─────────────────────────────── Persistence ───────────────────────────────
 
     /// <summary>
@@ -562,6 +593,7 @@ public sealed class EfWorkflowBuilderClient(
                 WorkflowDefinition = definition,
                 Version = highest + 1,
                 SubjectType = NullIfBlank(model.SubjectType),
+                CarryAssignmentForward = model.CarryAssignmentForward,
                 IsPublished = false,
                 IsLatest = false,
                 CreatorId = Actor,
@@ -575,6 +607,7 @@ public sealed class EfWorkflowBuilderClient(
         {
             await ClearGraphAsync(version, ct).ConfigureAwait(false);
             version.SubjectType = NullIfBlank(model.SubjectType);
+            version.CarryAssignmentForward = model.CarryAssignmentForward;
             version.ModifierId = Actor;
             version.Modified = now;
         }
@@ -888,6 +921,7 @@ public sealed class EfWorkflowBuilderClient(
             IsPublished = version.IsPublished,
             Name = version.WorkflowDefinition?.Name ?? string.Empty,
             SubjectType = version.SubjectType,
+            CarryAssignmentForward = version.CarryAssignmentForward,
             Description = version.WorkflowDefinition?.Description,
             IsSubWorkflow = version.WorkflowDefinition?.IsSubWorkflow ?? false,
             EntryTaskLocalId = EntryTaskDefinitionLocalId(version, localIds)
