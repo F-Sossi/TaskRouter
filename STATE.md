@@ -1,25 +1,63 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-09-30 (evening)**: `0.1.0-preview.3` is **published on
-nuget.org** and the host builds, tests and runs against it with no version override. Before
+context. Last updated **2026-10-01**: workflow duplication, assignment business rules and a
+filtered inbox index, shipped as `0.1.0-preview.4`. Before that, `preview.3` and the host
+consuming it with no version override. Before
 that, pre-assignment and a second day of driving the host
 application. Before that, the type-registry work, and a round of feedback
 from somebody using it. Before that: shipping the runner and inbox, and acting on what the
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
 
-**Where the session ended (2026-09-30, evening):** `main` is clean and pushed, 0 warnings,
-464/464 green. **Published: `0.1.0-preview.3`** of all four packages, verified against the
+**Where the session ended (2026-10-01):** `main` is clean and pushed, 0 warnings,
+474/474 green. **Published: `0.1.0-preview.4`** of all four packages, verified against the
 registry rather than against a green CI run. The host consumes it with no
 `-p:TaskRouterVersion=` override: 0 warnings, 2,179 tests green across its five suites.
 
 `0.1.0-preview.2` does not exist on nuget.org and never will. Its release run died on a
 nuget.org read-only 503, and by the time that could be retried the tag pointed at a commit
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
-force-pushing a public tag onto different content. **The stale `v0.1.0-preview.2` tag is
-still on GitHub**, pointing at a commit that was never published; delete it if the tags
-should match the registry.
+force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
+2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### What `0.1.0-preview.4` added — 2026-10-01
+
+1. **Duplicate a workflow.** Copies a version's whole graph onto a *new* workflow under a
+   new name. The mechanism already existed — `CreateDraftVersionAsync` deep-copies a graph —
+   so this is that pointed at a different target: clearing the definition id as well as the
+   version id makes `PersistCoreAsync` mint a new `WorkflowDefinition` numbered from 1. The
+   distinction worth keeping straight is which thing is new: a draft is the next *version*
+   and supersedes on publish, a duplicate is a separate *workflow*. Pre-assignments do not
+   come across and cannot — they hang off a run, not a version.
+
+2. **`CarryAssignmentForward`**, the first entry in a new **Business rules** section of the
+   builder. Decides who gets a step that names nobody and carries no role: the previous
+   step's assignee, or nobody. **Defaults to off**, which changed behaviour for workflows
+   that already existed — deliberately, and the migration says so.
+
+   The section is kept either way. The inbox offers unclaimed work only to members of the
+   task's own org unit, so dropping the unit too would hide the task from everybody.
+
+   **The distinction that matters**, found by breaking sub-workflow delegation on the first
+   attempt: an assignment somebody *chose* (delegation, an ad-hoc task against a person, a
+   run started on a named actor, rework returned to whoever worked the branch) is always
+   honoured; only one *inherited* from the previous step is governed. `AssignmentOrigin`
+   carries it and is a required parameter, so a new creation path cannot default silently.
+
+3. **The inbox index is filtered** to `[Status] IN (0, 1)`. It sat between two sweeper
+   indexes filtered for exactly this reason and was not, so its size tracked total history
+   rather than outstanding work.
+
+**Archiving completed runs as JSON was considered and rejected** (2026-10-01). The numbers
+say it solves the wrong problem: the workflow map is ~14 rows per version and fixed at
+authoring time, so duplication does not threaten it, and runs are ~18 rows each — 1.8M rows
+after a decade at 10k documents a year, which SQL Server does not notice. The cost would be
+the thing this library exists for: queryable state. The levers, in order, are the filtered
+index (done), then pruning `TaskRouterTaskLogs` (two thirds of row growth, and nothing in
+the engine reads it back), then a relational archive table or partitioning on
+`Runs.CompletedDate`. A denormalised run snapshot is only worth it as a display cache
+*alongside* the rows, never instead of them.
 
 This repository was started fresh at publication — the development history before that is
 kept privately, because it was written while working inside the first host and names it
