@@ -241,6 +241,26 @@ public class WorkflowDefinitionVersion : WorkflowEntity
     /// </summary>
     public string? SubjectType { get; set; }
 
+    /// <summary>
+    /// When a step names nobody — no pre-assignment for the run, no assignment role of its
+    /// own — should it go to whoever held the previous step, or to nobody?
+    ///
+    /// <para><b>Default false: to nobody.</b> The task arrives unassigned and sits in its
+    /// section's unclaimed work until somebody takes it. True restores the older behaviour,
+    /// where an unroled step silently follows whoever finished the one before it — right
+    /// for a workflow a single person shepherds end to end, wrong for most others.</para>
+    ///
+    /// <para>Only the person is dropped. The org unit is carried forward either way,
+    /// because the inbox shows unclaimed work exclusively to members of the task's own unit
+    /// — a task with neither would be visible to nobody, which is work lost rather than
+    /// work waiting.</para>
+    ///
+    /// <para>Versioned rather than held on the definition for the same reason as
+    /// <see cref="SubjectType"/>: it is behavioural, and editing it on a draft must not
+    /// change how runs already pinned to the published version behave.</para>
+    /// </summary>
+    public bool CarryAssignmentForward { get; set; }
+
     public bool IsPublished { get; set; }
     public bool IsLatest { get; set; }
     public DateTime? PublishedAt { get; set; }

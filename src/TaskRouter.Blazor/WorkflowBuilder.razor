@@ -114,6 +114,22 @@ else
                 </MudItem>
             </MudGrid>
 
+            @*  Business rules: how the workflow behaves, as opposed to what its graph is.
+                Separated from the fields above because those describe the workflow and
+                these decide what it does, and because this is where later rules go. *@
+            <MudText Typo="Typo.subtitle2" Class="mt-4"><b>Business rules</b></MudText>
+
+            <MudSwitch T="bool" @bind-Value="_model.CarryAssignmentForward"
+                       Color="Color.Primary" Class="mt-1"
+                       Label="Give the next step to whoever completed the last one" />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                @(_model.CarryAssignmentForward
+                    ? "A step that names nobody and has no assignment role follows the person who completed the step before it."
+                    : "A step that names nobody and has no assignment role arrives unassigned, waiting in its section for somebody to pick it up.")
+                Steps with an assignment role, and anyone pre-assigned on a run, are unaffected either way.
+            </MudText>
+
             <MudStack Row="true" Spacing="2" Class="mt-3" AlignItems="AlignItems.Center">
                 @if (_model.IsPublished)
                 {

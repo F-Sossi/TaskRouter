@@ -311,6 +311,8 @@ public sealed partial class WorkflowEngine
                     templateDef,
                     new WorkflowAssignment(null, branchKey),
                     template.ToSnapshot(),
+                    // As with the original fork: unit, no person.
+                    AssignmentOrigin.Inherited,
                     token).ConfigureAwait(false);
 
                 assignment = assignment with { BranchKey = branchKey };

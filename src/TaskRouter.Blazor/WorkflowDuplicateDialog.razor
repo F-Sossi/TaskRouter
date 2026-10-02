@@ -7,7 +7,12 @@
 
     The suggested name is the source's with a suffix, because the common case is a variant
     of the original rather than an unrelated workflow -- starting from the full name is
-    less typing than starting from an empty box. *@
+    less typing than starting from an empty box.
+
+    Show it with a width of its own -- `new DialogOptions { MaxWidth = MaxWidth.Small,
+    FullWidth = true }`. A host whose MudDialogProvider sets FullWidth without a MaxWidth
+    (a reasonable thing to do for its own screens) otherwise gets this one-field form
+    stretched across the display. *@
 
 <MudDialog>
     <DialogContent>

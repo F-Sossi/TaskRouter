@@ -34,10 +34,18 @@ public class SchemaGuardTests
     /// <summary>
     /// Forked is terminal-but-not-cancelled, and the convergence index deliberately
     /// does not exclude it — a forked origin never carries a ForkManifestId.
+    ///
+    /// <para>Two filtered indexes in WorkflowModelBuilder spell these numbers out, because
+    /// a SQL filter cannot name an enum member: the convergence guard excludes
+    /// <c>[Status] &lt;&gt; 3</c>, and the inbox index covers <c>[Status] IN (0, 1)</c> —
+    /// the open statuses. Renumbering would leave both indexes in place and silently
+    /// change what they mean, which is why the whole enum is pinned rather than just the
+    /// members in use.</para>
     /// </summary>
     [TestMethod]
     public void Task_status_ordinals_are_stable()
     {
+        // 0 and 1 are the open statuses the inbox index filters on.
         Assert.AreEqual(0, (int)WorkflowTaskStatus.NotStarted);
         Assert.AreEqual(1, (int)WorkflowTaskStatus.InProgress);
         Assert.AreEqual(2, (int)WorkflowTaskStatus.Completed);

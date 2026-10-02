@@ -4,6 +4,7 @@ using DemoDocuments.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace DemoDocuments.Server.Data.Migrations
 {
     [DbContext(typeof(DemoDbContext))]
-    partial class DemoDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261001184023_CarryAssignmentForward")]
+    partial class CarryAssignmentForward
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1126,8 +1129,7 @@ namespace DemoDocuments.Server.Data.Migrations
 
                     b.HasIndex("WorkflowRunId");
 
-                    b.HasIndex("AssignedToActorId", "Status")
-                        .HasFilter("[Status] IN (0, 1)");
+                    b.HasIndex("AssignedToActorId", "Status");
 
                     b.HasIndex("Status", "ReminderSentAt")
                         .HasFilter("[ReminderSentAt] IS NULL");

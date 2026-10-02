@@ -22,6 +22,9 @@ public sealed class WorkflowEditModel
     /// <summary>Attached to a task rather than started against a subject.</summary>
     public bool IsSubWorkflow { get; set; }
 
+    /// <inheritdoc cref="TaskRouter.Core.Model.WorkflowDefinitionVersion.CarryAssignmentForward"/>
+    public bool CarryAssignmentForward { get; set; }
+
     /// <summary>Client-side id of the entry task; matches <see cref="TaskEditModel.LocalId"/>.</summary>
     public Guid? EntryTaskLocalId { get; set; }
 

@@ -519,6 +519,46 @@ public class BuilderClientTests
             () => _client.DuplicateWorkflowAsync(sourceId, "   "));
     }
 
+    [TestMethod]
+    public async Task The_carry_forward_rule_round_trips_through_a_save()
+    {
+        // Version-scoped settings are the ones a save quietly drops: the UI binds them,
+        // the model carries them, and if the persist path does not copy them back the
+        // switch simply does not stick -- with nothing to see but a toggle that resets.
+        var draftId = await _client.CreateDraftVersionAsync(await SeededVersionIdAsync());
+
+        var model = (await _client.GetWorkflowAsync(draftId))!;
+        Assert.IsFalse(model.CarryAssignmentForward, "off is the default");
+
+        model.CarryAssignmentForward = true;
+        var saved = await _client.SaveAsync(model);
+        Assert.IsTrue(saved.Success, string.Join("; ", saved.Errors.Select(e => e.Code)));
+
+        var reloaded = (await _client.GetWorkflowAsync(saved.VersionId))!;
+        Assert.IsTrue(reloaded.CarryAssignmentForward, "the switch did not survive the save");
+
+        // And back off again, so the test cannot pass on a field that is only ever set.
+        reloaded.CarryAssignmentForward = false;
+        var off = await _client.SaveAsync(reloaded);
+
+        Assert.IsFalse((await _client.GetWorkflowAsync(off.VersionId))!.CarryAssignmentForward);
+    }
+
+    [TestMethod]
+    public async Task A_duplicate_keeps_the_carry_forward_rule()
+    {
+        // A duplicate that silently reverted a business rule to the default would be a
+        // trap: the copy looks like the original everywhere the eye checks.
+        var draftId = await _client.CreateDraftVersionAsync(await SeededVersionIdAsync());
+        var model = (await _client.GetWorkflowAsync(draftId))!;
+        model.CarryAssignmentForward = true;
+        var saved = await _client.SaveAsync(model);
+
+        var copyId = await _client.DuplicateWorkflowAsync(saved.VersionId, "Carries Forward Copy");
+
+        Assert.IsTrue((await _client.GetWorkflowAsync(copyId))!.CarryAssignmentForward);
+    }
+
     // ──────────────────────── Sub-workflow attachment scope ────────────────────────
 
     // WorkflowDefinitionValidator.Validate early-returns WF_EMPTY for a version with no

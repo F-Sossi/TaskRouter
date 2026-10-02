@@ -93,6 +93,9 @@ public sealed partial class WorkflowEngine
                     originDef,
                     new WorkflowAssignment(null, branchKey),
                     origin.ToSnapshot(),
+                    // A branch starts with its unit and no person by design, so there is
+                    // nothing here for carry-forward to drop either way.
+                    AssignmentOrigin.Inherited,
                     token).ConfigureAwait(false);
 
                 // The branch key is authoritative even if a resolver returns something else.
@@ -264,6 +267,10 @@ public sealed partial class WorkflowEngine
                     reworkDef,
                     new WorkflowAssignment(entry.AssignedToActorId, branchKey),
                     task.ToSnapshot(),
+                    // Rework goes back to whoever worked the branch that was rejected --
+                    // which is why the manifest records them. Returning it to the section
+                    // pool instead would lose "you fix what you did".
+                    AssignmentOrigin.Explicit,
                     token).ConfigureAwait(false);
 
                 assignment = assignment with { BranchKey = branchKey };

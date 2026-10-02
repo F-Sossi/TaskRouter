@@ -593,6 +593,7 @@ public sealed class EfWorkflowBuilderClient(
                 WorkflowDefinition = definition,
                 Version = highest + 1,
                 SubjectType = NullIfBlank(model.SubjectType),
+                CarryAssignmentForward = model.CarryAssignmentForward,
                 IsPublished = false,
                 IsLatest = false,
                 CreatorId = Actor,
@@ -606,6 +607,7 @@ public sealed class EfWorkflowBuilderClient(
         {
             await ClearGraphAsync(version, ct).ConfigureAwait(false);
             version.SubjectType = NullIfBlank(model.SubjectType);
+            version.CarryAssignmentForward = model.CarryAssignmentForward;
             version.ModifierId = Actor;
             version.Modified = now;
         }
@@ -919,6 +921,7 @@ public sealed class EfWorkflowBuilderClient(
             IsPublished = version.IsPublished,
             Name = version.WorkflowDefinition?.Name ?? string.Empty,
             SubjectType = version.SubjectType,
+            CarryAssignmentForward = version.CarryAssignmentForward,
             Description = version.WorkflowDefinition?.Description,
             IsSubWorkflow = version.WorkflowDefinition?.IsSubWorkflow ?? false,
             EntryTaskLocalId = EntryTaskDefinitionLocalId(version, localIds)
