@@ -28,7 +28,21 @@ public class DemoDbContext(DbContextOptions<DemoDbContext> options)
     public DbSet<Person> People => Set<Person>();
     public DbSet<WorkItem> WorkItems => Set<WorkItem>();
 
-    // ── Engine (IWorkflowDbContext) ──
+    // ── Engine ──
+    //
+    // **A host does not have to write any of this.** IWorkflowDbContext defaults all
+    // nineteen sets in terms of Set<T>(), and DbContext already supplies Set<T>(),
+    // Database and SaveChangesAsync -- so `: DbContext, IWorkflowDbContext` with an empty
+    // body compiles and runs. HostContextShapeTests pins exactly that.
+    //
+    // They are spelled out here because a default interface member is reachable through the
+    // interface, not through the class, and this demo is an unusually heavy reader of the
+    // engine's own tables: the seeder authors workflows row by row, and the test suite
+    // inspects every one of the nineteen through DemoDbContext directly. Declaring a set is
+    // what makes `db.WorkflowTasks` compile on the concrete type.
+    //
+    // The guidance for a real host is the middle of those two: declare the sets your own
+    // code reads, inherit the rest. Most hosts read none of them and write nothing here.
     public DbSet<TaskTypeDefinition> WorkflowTaskTypes => Set<TaskTypeDefinition>();
     public DbSet<OutcomeTypeDefinition> WorkflowOutcomeTypes => Set<OutcomeTypeDefinition>();
     public DbSet<PreAssignment> WorkflowPreAssignments => Set<PreAssignment>();

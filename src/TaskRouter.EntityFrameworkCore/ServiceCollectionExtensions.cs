@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -97,6 +98,46 @@ public sealed class WorkflowEngineBuilder(IServiceCollection services)
     public WorkflowEngineBuilder AddRouteCondition<T>() where T : class, IRouteConditionEvaluator
     {
         Services.AddScoped<IRouteConditionEvaluator, T>();
+        return this;
+    }
+
+    /// <summary>
+    /// Checks the wiring as the application starts and writes what it finds to the log.
+    ///
+    /// <para>Problems are logged as errors and, with <paramref name="throwOnProblems"/>,
+    /// stop the application — which is usually what you want, because every problem it
+    /// reports is one that would otherwise surface as a confusing failure at the first
+    /// request instead. Warnings are logged either way and never block startup: each is a
+    /// legal default, and a check that refuses to start over a deliberate choice is a check
+    /// that gets switched off.</para>
+    ///
+    /// <para>Call it last, after the seams are registered, so it sees the finished picture.
+    /// <see cref="WorkflowWiring.Inspect(IServiceProvider)"/> is the same check if you would rather run it
+    /// yourself — from a health endpoint, say.</para>
+    /// </summary>
+    public WorkflowEngineBuilder ValidateWiringAtStartup(bool throwOnProblems = true)
+    {
+        // Immediately, against the descriptors. This has to beat ASP.NET Core's own
+        // validate-on-build, which in Development trips first on a missing
+        // IWorkflowDbContext and reports it as eight services that could not be
+        // constructed -- the actual cause repeated inside each and named nowhere. Running
+        // here means the author sees one sentence and the line to add instead.
+        var registration = WorkflowWiring.Inspect(Services);
+
+        if (throwOnProblems && !registration.IsHealthy)
+        {
+            throw new InvalidOperationException(registration.ToString());
+        }
+
+        // And again once there is a container, for what descriptors cannot answer: whether
+        // the registrations actually resolve, and whether the editor accessor can name
+        // somebody rather than merely existing.
+        Services.AddHostedService(provider =>
+            new WorkflowWiringCheck(
+                provider,
+                provider.GetRequiredService<ILogger<WorkflowWiringCheck>>(),
+                throwOnProblems));
+
         return this;
     }
 
@@ -245,6 +286,40 @@ public static class ServiceCollectionExtensions
     /// Registers the library's domain-agnostic triggers. The webhook trigger
     /// additionally needs <c>services.AddHttpClient()</c>.
     /// </param>
+    /// <summary>
+    /// Registers the engine against the host's own <typeparamref name="TContext"/> — the
+    /// whole of the required wiring, in one call.
+    ///
+    /// <para>Equivalent to mapping the context onto the seam and then calling
+    /// <see cref="AddTaskRouter"/>:</para>
+    /// <code>
+    /// services.AddScoped&lt;IWorkflowDbContext&gt;(sp => sp.GetRequiredService&lt;TContext&gt;());
+    /// services.AddTaskRouter();
+    /// </code>
+    ///
+    /// <para>It exists because that first line is the one registration no extension method
+    /// can infer — <c>AddTaskRouter()</c> has no way to know which of a host's contexts
+    /// implements the interface — and leaving it out does not fail at startup. It fails on
+    /// the first engine call, as a generic "no service for type IWorkflowDbContext" that
+    /// names neither the context nor the fix. Naming the context as a type argument is the
+    /// smallest way to make it impossible to forget.</para>
+    ///
+    /// <para>The context must still implement <see cref="IWorkflowDbContext"/> and call
+    /// <c>ConfigureTaskRouter()</c> from <c>OnModelCreating</c>; the interface needs no
+    /// members of its own, so that is a declaration and one line.</para>
+    /// </summary>
+    public static WorkflowEngineBuilder AddTaskRouterFor<TContext>(
+        this IServiceCollection services,
+        bool includeBuiltInTriggers = true)
+        where TContext : DbContext, IWorkflowDbContext
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddScoped<IWorkflowDbContext>(provider => provider.GetRequiredService<TContext>());
+
+        return services.AddTaskRouter(includeBuiltInTriggers);
+    }
+
     public static WorkflowEngineBuilder AddTaskRouter(
         this IServiceCollection services,
         bool includeBuiltInTriggers = true)
