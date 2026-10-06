@@ -3,7 +3,7 @@
 Snapshot of where the engine stands, so work can resume without re-deriving
 context. Last updated **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
 needs no members of its own, `AddTaskRouterFor<T>()`, and startup wiring diagnostics —
-shipped as `0.1.0-preview.5`. Before that, workflow duplication, assignment business rules
+shipped as `0.1.0-preview.5`, with a defect in it fixed by `0.1.0-preview.6`. Before that, workflow duplication, assignment business rules
 and a filtered inbox index, as `0.1.0-preview.4`. Before that, `preview.3` and the host
 consuming it with no version override. Before
 that, pre-assignment and a second day of driving the host
@@ -13,7 +13,7 @@ integration spike found, twice — once on plan 1's seven findings and again on 
 produced. See the git log for the order things happened in.
 
 **Where the session ended (2026-10-05):** `main` is clean and pushed, 0 warnings,
-484/484 green. **Published: `0.1.0-preview.5`** of all four packages, verified against the
+485/485 green. **Published: `0.1.0-preview.6`** of all four packages, verified against the
 registry rather than against a green CI run. The host consumes it with no
 `-p:TaskRouterVersion=` override: 0 warnings, 2,179 tests green across its five suites.
 
@@ -22,6 +22,22 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### `0.1.0-preview.6` — the defect preview.5 shipped, 2026-10-05
+
+**`ValidateWiringAtStartup()` refused to start a correctly wired host.** The provider-level
+check asked `IWorkflowEditorActorAccessor` for an actor id to prove it could answer. The
+usual implementation reads the current user from the HTTP context and throws at startup
+because there is no request in flight — correct behaviour, not a wiring fault — so the
+check reported a problem and stopped the application.
+
+Found by running the real host against `preview.5`, not by the suite: the demo's accessor
+answers outside a request, so the test written alongside the feature passed. The regression
+test now uses an accessor that behaves like a real one.
+
+**Any host on `preview.5` that calls `ValidateWiringAtStartup()` will fail to start.**
+Everything else in `preview.5` is unaffected — the interface change and
+`AddTaskRouterFor<T>` are sound.
 
 ### What `0.1.0-preview.5` added — 2026-10-05
 

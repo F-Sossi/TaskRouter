@@ -221,23 +221,20 @@ public static class WorkflowWiring
 
         // ── The builder's own seam ──
         //
-        // IWorkflowEditorActorAccessor throws rather than defaulting, because attributing
-        // every workflow edit in a system to a placeholder is worse than failing. Resolving
-        // it here turns that into a startup message instead of a first-edit exception.
-        if (Resolve<IWorkflowBuilderClient>() is not null)
+        // Resolved, never asked for an actor. The usual implementation reads the current
+        // user from the HTTP context and throws at startup because there is no request in
+        // flight yet -- which is correct behaviour, not a wiring fault. An earlier version
+        // of this check evaluated ActorId here and refused to start every correctly wired
+        // host whose accessor was request-scoped, which is nearly all of them.
+        //
+        // Whether the accessor is registered at all is a question about registrations, and
+        // Inspect(IServiceCollection) answers it without needing an instance.
+        if (Resolve<IWorkflowBuilderClient>() is not null && Resolve<IWorkflowEditorActorAccessor>() is null)
         {
-            try
-            {
-                _ = services.GetRequiredService<IWorkflowEditorActorAccessor>().ActorId;
-            }
-            catch (Exception ex)
-            {
-                problems.Add(
-                    "The workflow builder is registered but IWorkflowEditorActorAccessor cannot "
-                    + "say who is editing, so every save would be misattributed or throw.\n"
-                    + "Register one with services.AddScoped<IWorkflowEditorActorAccessor, YourAccessor>().\n"
-                    + "It reported: " + ex.Message);
-            }
+            problems.Add(
+                "The workflow builder is registered but nothing says who is editing, so every "
+                + "save would be misattributed.\n"
+                + "    services.AddScoped<IWorkflowEditorActorAccessor, YourAccessor>();");
         }
 
         return new Report(problems, warnings);

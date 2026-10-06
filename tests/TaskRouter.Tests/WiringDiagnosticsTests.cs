@@ -5,6 +5,7 @@ using DemoDocuments.Server.Data;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.EntityFrameworkCore;
+using TaskRouter.EntityFrameworkCore.Builder;
 
 namespace TaskRouter.Tests;
 
@@ -98,6 +99,33 @@ public class WiringDiagnosticsTests
 
         Assert.IsFalse(report.IsHealthy);
         Assert.IsGreaterThan(0, report.Problems.Count);
+    }
+
+    /// <summary>An accessor that can only answer during a request — the normal shape, and
+    /// what every HTTP-context-backed implementation does.</summary>
+    private sealed class RequestScopedActorAccessor : IWorkflowEditorActorAccessor
+    {
+        public string ActorId =>
+            throw new InvalidOperationException("No authenticated user.");
+    }
+
+    [TestMethod]
+    public void An_accessor_that_needs_a_request_does_not_fail_startup()
+    {
+        // The check must not evaluate a per-request value outside a request. Asking this
+        // accessor for an actor at startup throws by design -- there is no user yet -- and
+        // an earlier version of this diagnostic took that for a wiring fault and refused to
+        // start a correctly wired host.
+        var services = BaseServices();
+        services.AddScoped<IWorkflowDbContext>(sp => sp.GetRequiredService<DemoDbContext>());
+        services.AddTaskRouter().AddWorkflowBuilder();
+        services.AddScoped<IWorkflowEditorActorAccessor, RequestScopedActorAccessor>();
+
+        var report = WorkflowWiring.Inspect(services.BuildServiceProvider());
+
+        Assert.IsTrue(report.IsHealthy,
+            "a request-scoped accessor is correct, not broken: "
+            + string.Join(" | ", report.Problems));
     }
 
     [TestMethod]
