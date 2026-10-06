@@ -1132,6 +1132,28 @@ excluding `wwwroot/lib`, whose minified vendor code matches almost any short str
 
 The remaining smaller candidates are:
 
+- **The test suite leaks about one database per run.** Measured 2026-10-05: a full,
+  entirely-passing 485-test run left **1** `WorkflowTest_*` database behind. At that rate it
+  had accumulated **404 of them, 6.4 GB**, which were dropped that day leaving only `TRDIS`.
+
+  **The cleanup is not missing.** Both `TestHost.DisposeAsync` and
+  `EndpointTestHost.DisposeAsync` call `EnsureDeletedAsync()`, and every test class disposes
+  its host — the classes that looked like they did not are using `await using`. Single test
+  classes run clean, leaving zero.
+
+  So the drop is *failing* occasionally, and the `catch (Exception)` around it — commented
+  "a leaked test database is noise, not a test failure" — makes that invisible. The
+  swallow is right; the silence is not.
+
+  **Most likely cause, to verify rather than assume:** the suite runs 16 workers in
+  parallel, and `DROP DATABASE` fails while any connection remains open. ADO.NET pools
+  connections, so a pooled connection outliving the context would do it. If that is right
+  the fix is `SqlConnection.ClearPool` (or `ClearAllPools`) before the drop, or a short
+  retry. **Log the swallowed exception first** — one run would say whether it is really
+  "database in use" or something else entirely.
+
+
+
 - **Duplicate a workflow.** Requested 2026-09-30 from the host. Two real uses, and they
   want different things: copying a workflow *for another section*, where the graph is the
   same and the assignments differ, and reusing one *on a different document type*, where
