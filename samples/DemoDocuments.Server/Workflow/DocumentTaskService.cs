@@ -23,7 +23,7 @@ namespace DemoDocuments.Server.Workflow;
 /// Nothing here contains workflow logic. If a method in the original system's real service does
 /// contain logic, that logic either belongs in a host trigger or is a gap in the engine.
 /// </summary>
-public class DocumentTaskService(DemoDbContext db, IWorkflowEngine engine) : IDocumentTaskService
+public class DocumentTaskService(IWorkflowDbContext db, IWorkflowEngine engine) : IDocumentTaskService
 {
     /// <summary>Kind 1: the only place the host describes what a workflow is *about*.</summary>
     private static WorkflowSubject Subject(int documentId, DemoDocumentTypeRef type) =>

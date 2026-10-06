@@ -321,7 +321,7 @@ public static class DemoWorkflowSeeder
     /// rows, not five copies of the graph.
     /// </summary>
     private static async Task SeedSubWorkflowAsync(
-        DemoDbContext db,
+        IWorkflowDbContext db,
         Dictionary<string, TaskTypeDefinition> types,
         int attachToTaskDefinitionId,
         string actor,

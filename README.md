@@ -10,7 +10,7 @@ Temporal orchestrate *code*, this routes work between *people*.
 
 > Status: the engine core, persistence, the HTTP endpoints, the builder and runner
 > UI — in process and over HTTP — the trigger runtime, deadlines and escalation all
-> exist and pass 403 integration tests against SQL Server. Timers are the one roadmap
+> exist and pass 484 integration tests against SQL Server. Timers are the one roadmap
 > item left — see [Roadmap](#roadmap).
 
 ## Layout
@@ -140,38 +140,67 @@ export WORKFLOW_TEST_CONNECTION="Server=...;User Id=...;Password=...;TrustServer
 
 ## Integrating into a host
 
-**Four things are yours to provide.** The library defines nine host interfaces, which
-makes it look more demanding than it is: `AddTaskRouter()` registers a working default for
-every one it can, so a host that supplies nothing but the first item below still gets an
-engine that runs.
+**Two declarations and one call.** That is the whole of the required wiring:
 
-1. **Implement `IWorkflowDbContext` on your existing `DbContext`**, and call
-   `modelBuilder.ConfigureTaskRouter()` in `OnModelCreating`. TaskRouter's 17 tables live
-   in your database and your migrations; every one of them is prefixed `TaskRouter*`.
+```csharp
+public partial class MyDbContext : DbContext, IWorkflowDbContext
+{
+    protected override void OnModelCreating(ModelBuilder b) => b.ConfigureTaskRouter();
+}
+```
 
-2. **Map your context onto the seam yourself.** `AddTaskRouter()` cannot do this for you,
-   and it is the one registration every host must write:
+```csharp
+services.AddDbContext<MyDbContext>(o => o.UseSqlServer(cs));
 
-   ```csharp
-   services.AddDbContext<MyDbContext>(o => o.UseSqlServer(cs));
-   services.AddScoped<IWorkflowDbContext>(sp => sp.GetRequiredService<MyDbContext>());
+services.AddTaskRouterFor<MyDbContext>()
+        .AddAssignmentResolver<MyAssignmentResolver>()
+        .AddAuthorizationPolicy<MyAuthorizationPolicy>()
+        .AddRouteCondition<MyRouteCondition>()
+        .ValidateWiringAtStartup();
+```
 
-   services.AddTaskRouter()
-           .AddAssignmentResolver<MyAssignmentResolver>()
-           .AddAuthorizationPolicy<MyAuthorizationPolicy>()
-           .AddRouteCondition<MyRouteCondition>();
-   ```
+**`IWorkflowDbContext` needs no members of your own.** It asks for `Set<T>()`, `Database`
+and `SaveChangesAsync`, which `DbContext` already has, and defaults all nineteen of its
+sets in terms of `Set<T>()`. Declare one yourself only to reach it from your own code as
+`context.WorkflowTasks` — a default interface member is visible through the interface, not
+the class — or to override one whose name you already use.
 
-   Omit the middle line and nothing complains until the first engine call, which fails
-   with a generic "no service for type `IWorkflowDbContext`".
+TaskRouter's 17 tables live in your database and your migrations, each prefixed
+`TaskRouter*`, so they never collide with yours.
 
-3. **Implement `IWorkflowAssignmentResolver`** — who a task goes to. The default keeps
-   whatever assignment it was handed, so without one nothing is ever routed to anybody.
+**`AddTaskRouterFor<T>` maps the context onto the seam for you.** That mapping is the one
+registration nothing can infer, and leaving it out does not fail at startup — it fails on
+the first engine call with a generic "no service for type `IWorkflowDbContext`". Naming the
+context as a type argument makes it impossible to forget. `AddTaskRouter()` without the
+type argument still exists for hosts that would rather map it themselves.
 
-4. **Implement `IWorkflowAuthorizationPolicy`**, plus an `IRouteConditionEvaluator` for
-   each condition key your routes name. The default policy permits every operation and
-   says so in the log once per process; a route whose condition has no registered
-   evaluator fails closed — the route is skipped and a warning logged.
+**`ValidateWiringAtStartup()` checks the rest**, as the application starts rather than at
+the first request, and names the fix for anything missing:
+
+```
+TaskRouter is not correctly wired:
+  * IWorkflowDbContext is not registered, so no engine call can reach a database.
+    Either name your context when registering the engine:
+        services.AddTaskRouterFor<YourDbContext>();
+```
+
+It also warns — without blocking startup — about the defaults that are legal but rarely
+what you want in production: no authorization policy means every operation is permitted,
+no assignment resolver means role keys resolve to nothing, no due-date resolver means
+deadlines never fire.
+
+### What is actually yours to implement
+
+The library defines thirteen host interfaces and `AddTaskRouter()` ships a working default
+for every one it can, so the list is shorter than it looks:
+
+1. **`IWorkflowAssignmentResolver`** — who a task goes to. The default keeps whatever
+   assignment it was handed, so without one nothing is ever routed to anybody.
+
+2. **`IWorkflowAuthorizationPolicy`**, plus an `IRouteConditionEvaluator` for each
+   condition key your routes name. The default policy permits every operation and says so
+   in the log once per process; a route whose condition has no registered evaluator fails
+   closed — the route is skipped and a warning logged.
 
 Optional, and inert until you supply them: `IWorkflowDueDateResolver` (no resolver, no
 deadlines), `IWorkflowProgressSink`, `IWorkflowNotificationSink`, `IWorkflowJobQueue`

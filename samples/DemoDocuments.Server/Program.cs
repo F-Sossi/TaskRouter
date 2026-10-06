@@ -42,10 +42,13 @@ builder.Services.AddScoped(sp =>
 // in the host: the engine reaches the host's DbContext through IWorkflowDbContext,
 // so engine writes and domain writes share one change tracker and one transaction.
 // ─────────────────────────────────────────────────────────────────────────────
-builder.Services.AddScoped<IWorkflowDbContext>(sp => sp.GetRequiredService<DemoDbContext>());
 builder.Services.AddHttpClient();          // the built-in webhook trigger needs this
 
-builder.Services.AddTaskRouter()
+// AddTaskRouterFor<T> maps the host's context onto IWorkflowDbContext and registers the
+// engine in one call. The separate AddScoped<IWorkflowDbContext>(...) it replaces was the
+// one registration nothing could infer, and forgetting it failed on the first engine call
+// rather than here.
+builder.Services.AddTaskRouterFor<DemoDbContext>()
     // The builder client itself is the library's. The demo supplies the two things it cannot
     // know: which role keys DemoAssignmentResolver understands, and who is editing.
     .AddWorkflowBuilder(o =>
@@ -78,7 +81,11 @@ builder.Services.AddTaskRouter()
     .AddOutboxProcessing(o => o.PollInterval = TimeSpan.FromSeconds(5))
     // And without this nothing ever nudges anybody and nothing ever escalates. A short
     // poll for the same reason -- the default is 5 minutes, far too slow to watch working.
-    .AddDeadlineProcessing(o => o.PollInterval = TimeSpan.FromSeconds(15));
+    .AddDeadlineProcessing(o => o.PollInterval = TimeSpan.FromSeconds(15))
+    // Last, so it sees the finished container. Reports anything missing as the application
+    // starts rather than at the first request, and names the fix for each -- which is the
+    // difference between a wiring mistake costing a minute and costing an afternoon.
+    .ValidateWiringAtStartup();
 
 // The host's own service, shaped like the original system's IDocumentTaskService.
 builder.Services.AddScoped<IDocumentTaskService, DocumentTaskService>();
@@ -336,7 +343,7 @@ tasksApi.MapGet("/fork-manifests/{documentId:int}", async (
 app.MapGet("/tasks/assigned/{actorId}", async (string actorId, IWorkflowInboxClient inbox) =>
     await inbox.GetInboxAsync(actorId));
 
-app.MapGet("/workflow/definitions", async (DemoDbContext db) =>
+app.MapGet("/workflow/definitions", async (IWorkflowDbContext db) =>
     await db.WorkflowDefinitionVersions
         .Include(v => v.WorkflowDefinition)
         .Include(v => v.Tasks).ThenInclude(t => t.TaskType)
