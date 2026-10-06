@@ -1,8 +1,10 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-01**: workflow duplication, assignment business rules and a
-filtered inbox index, shipped as `0.1.0-preview.4`. Before that, `preview.3` and the host
+context. Last updated **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
+needs no members of its own, `AddTaskRouterFor<T>()`, and startup wiring diagnostics —
+shipped as `0.1.0-preview.5`. Before that, workflow duplication, assignment business rules
+and a filtered inbox index, as `0.1.0-preview.4`. Before that, `preview.3` and the host
 consuming it with no version override. Before
 that, pre-assignment and a second day of driving the host
 application. Before that, the type-registry work, and a round of feedback
@@ -10,8 +12,8 @@ from somebody using it. Before that: shipping the runner and inbox, and acting o
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
 
-**Where the session ended (2026-10-01):** `main` is clean and pushed, 0 warnings,
-474/474 green. **Published: `0.1.0-preview.4`** of all four packages, verified against the
+**Where the session ended (2026-10-05):** `main` is clean and pushed, 0 warnings,
+484/484 green. **Published: `0.1.0-preview.5`** of all four packages, verified against the
 registry rather than against a green CI run. The host consumes it with no
 `-p:TaskRouterVersion=` override: 0 warnings, 2,179 tests green across its five suites.
 
@@ -20,6 +22,45 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### What `0.1.0-preview.5` added — 2026-10-05
+
+An ergonomics pass, prompted by the question "why does adopting this need so much knowledge
+of how it works?" The measurement that framed it: a host hand-wrote **19 `DbSet`
+properties**, and **35 wiring mistakes were documented in the library's own comments as
+failing only at runtime**, with no startup validation anywhere. Nearly every friction point
+was the same shape — the library knew the host had got it wrong, said nothing until the
+first request, then said something unhelpful.
+
+1. **`IWorkflowDbContext` needs no members of its own.** It asks for `Set<T>()`, `Database`
+   and `SaveChangesAsync` — which `DbContext` already declares with exactly those
+   signatures — and defaults all nineteen sets in terms of `Set<T>()`. A host context
+   satisfies it with an empty body.
+
+   This also dissolves the name-collision finding from the first integration spike. A host
+   may still declare any set and its own wins; it is no longer forced to declare the other
+   eighteen to do so. **Source-compatible**: a host that declares all nineteen is unaffected,
+   which was verified against the real host before publishing.
+
+   The trade-off, stated plainly: a default interface member is reachable through the
+   interface, not the class. Host code wanting `context.WorkflowTasks` declares that one set,
+   or uses `Set<T>()`. Measured on the real host — production code needed **1 of 19**.
+
+2. **`AddTaskRouterFor<TContext>()`** registers the context mapping from the type argument.
+   That mapping is the one registration nothing can infer, and omitting it failed on the
+   first engine call rather than at startup.
+
+3. **`ValidateWiringAtStartup()`** reports everything missing at once and names the fix for
+   each. **It runs twice, deliberately.** The descriptor pass runs at registration time
+   because it has to beat ASP.NET Core's own validate-on-build, which in Development trips
+   first on a missing `IWorkflowDbContext` and reports it as eight services that could not
+   be constructed — the actual cause repeated inside each and named nowhere. The provider
+   pass runs as a hosted service for what descriptors cannot answer. Permissive defaults
+   warn rather than fail: a check that refuses to start over a deliberate choice gets
+   switched off, and then catches nothing.
+
+   Verified by sabotage as well as by tests — removing the context mapping from the demo
+   produces one sentence and the line to add.
 
 ### What `0.1.0-preview.4` added — 2026-10-01
 
