@@ -3,7 +3,7 @@
 Snapshot of where the engine stands, so work can resume without re-deriving
 context. Last updated **2026-10-06**: `0.1.0-preview.7` and `preview.8` — a completed task
 names who did it, and a host can hide the assignment controls. The integration was also
-re-done against a newer TRDIS export; that work lives in the private deployment repository.
+re-done against a newer export of the first host; that work lives in its own private repository.
 Before that, **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
 needs no members of its own, `AddTaskRouterFor<T>()`, and startup wiring diagnostics —
 shipped as `0.1.0-preview.5`, with a defect in it fixed by `0.1.0-preview.6`. Then
@@ -17,9 +17,9 @@ integration spike found, twice — once on plan 1's seven findings and again on 
 produced. See the git log for the order things happened in.
 
 **Where the session ended (2026-10-06):** `main` clean and pushed, 0 warnings, 490/490 green,
-`0.1.0-preview.8` published. The host integration was rebuilt from scratch against a newer
-TRDIS export — 715 files had moved and the old patch no longer applied — and now carries the
-assignment claim and the task/current-step dashboard. See the deployment repository.
+`0.1.0-preview.8` published. The first host's integration was rebuilt from scratch against a
+newer export of that application — 715 files had moved and the old patch no longer applied.
+That work, and everything naming the host, lives in its own private repository.
 
 **Previously (2026-10-05):** `main` is clean and pushed, 0 warnings,
 490/490 green. **Published: `0.1.0-preview.7`** of all four packages, verified against the
@@ -1163,7 +1163,7 @@ The remaining smaller candidates are:
 
 - **The test suite leaks about one database per run.** Measured 2026-10-05: a full,
   entirely-passing 485-test run left **1** `WorkflowTest_*` database behind. At that rate it
-  had accumulated **404 of them, 6.4 GB**, which were dropped that day leaving only `TRDIS`.
+  had accumulated **404 of them, 6.4 GB**, which were dropped that day, leaving only the host application's own database.
 
   **The cleanup is not missing.** Both `TestHost.DisposeAsync` and
   `EndpointTestHost.DisposeAsync` call `EnsureDeletedAsync()`, and every test class disposes
