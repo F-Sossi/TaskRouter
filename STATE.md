@@ -3,7 +3,8 @@
 Snapshot of where the engine stands, so work can resume without re-deriving
 context. Last updated **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
 needs no members of its own, `AddTaskRouterFor<T>()`, and startup wiring diagnostics —
-shipped as `0.1.0-preview.5`, with a defect in it fixed by `0.1.0-preview.6`. Before that, workflow duplication, assignment business rules
+shipped as `0.1.0-preview.5`, with a defect in it fixed by `0.1.0-preview.6`. Then
+`0.1.0-preview.7`: completing a task hands it to whoever completed it. Before that, workflow duplication, assignment business rules
 and a filtered inbox index, as `0.1.0-preview.4`. Before that, `preview.3` and the host
 consuming it with no version override. Before
 that, pre-assignment and a second day of driving the host
@@ -13,7 +14,7 @@ integration spike found, twice — once on plan 1's seven findings and again on 
 produced. See the git log for the order things happened in.
 
 **Where the session ended (2026-10-05):** `main` is clean and pushed, 0 warnings,
-485/485 green. **Published: `0.1.0-preview.6`** of all four packages, verified against the
+490/490 green. **Published: `0.1.0-preview.7`** of all four packages, verified against the
 registry rather than against a green CI run. The host consumes it with no
 `-p:TaskRouterVersion=` override: 0 warnings, 2,179 tests green across its five suites.
 
@@ -22,6 +23,26 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### `0.1.0-preview.7` — a completed task names who did it, 2026-10-06
+
+Anybody permitted may sign a task off, not only the person it names — covering for somebody
+on leave is ordinary. The task went on carrying the original name, so a list of completed
+work credited the wrong person, and the only record of the truth was `ModifierId` and the
+log. **Completing a task now sets its assignee to whoever completed it.**
+
+The reasoning: the assignment on a finished task is not a plan any more, because nobody is
+going to do it next. The one useful question it can answer is "who did this".
+
+Three things it deliberately does not do. The **org unit is left alone** — a stand-in signing
+off does not move the work to their section, and every role key downstream resolves against
+it. The handover is **logged as `Reassigned`** naming the previous assignee, because "why
+does this say I did it" needs an answer. And completing your own task **changes nothing and
+logs nothing**, so the log does not fill with non-events.
+
+Worth noting with [the assignment business rule](#what-010-preview4-added--2026-10-01): a
+step with no role now arrives unassigned, so "completed by somebody it was not assigned to"
+is the common case rather than the exception, and the blank would otherwise have persisted.
 
 ### `0.1.0-preview.6` — the defect preview.5 shipped, 2026-10-05
 

@@ -233,12 +233,43 @@ public sealed partial class WorkflowEngine(
             await ValidateCompletableAsync(task, outcomeKey, token).ConfigureAwait(false);
 
             var now = DateTime.UtcNow;
+
+            // Whoever signed it off is who did it.
+            //
+            // Anybody permitted may complete a task, not only the person it names -- covering
+            // for somebody on leave is ordinary -- and the task used to go on carrying the
+            // original name, so a list of completed work credited the wrong person and the
+            // only record of the truth was ModifierId and the log.
+            //
+            // The assignment on a finished task is not a plan any more: nobody is going to do
+            // it next. The one useful question it can answer is "who did this", so it answers
+            // that. The org unit is left alone -- a stand-in signing off does not move the
+            // work to their section, and every role key downstream resolves against it.
+            var previousAssignee = task.AssignedToActorId;
+            var handedOver = !string.Equals(previousAssignee, actorId, StringComparison.Ordinal);
+
+            if (handedOver)
+            {
+                task.AssignedToActorId = actorId;
+            }
+
             task.Status = WorkflowTaskStatus.Completed;
             task.OutcomeKey = outcomeKey;
             task.CompletedDate = now;
             task.Notes = notes ?? task.Notes;
             task.ModifierId = actorId;
             task.Modified = now;
+
+            if (handedOver)
+            {
+                // Said out loud rather than overwritten silently: "why does this say I did it"
+                // needs an answer, and the name that was there is otherwise gone.
+                Log(task.Id, "Reassigned",
+                    previousAssignee is null
+                        ? "Completed by somebody who was not assigned it; it was unclaimed."
+                        : $"Completed by somebody who was not assigned it; it was {previousAssignee}.",
+                    actorId, now);
+            }
 
             Log(task.Id, "Completed", $"Outcome: {outcomeKey}", actorId, now);
             await db.SaveChangesAsync(token).ConfigureAwait(false);
