@@ -221,7 +221,7 @@
                                                 rule with it, leaving the divider broken mid-table. *@
                                             <td>
                                                 <div class="d-flex justify-end">
-                                                    @if (step.CanPreAssign)
+                                                    @if (CanAssign && step.CanPreAssign)
                                                     {
                                                         <MudButton Size="Size.Small" Variant="Variant.Text"
                                                                    Disabled="@_busy"
@@ -447,10 +447,13 @@
                                 <MudIconButton Icon="@Icons.Material.Filled.EditNote" Size="Size.Small"
                                                Disabled="@_busy" OnClick="@(() => EditNotes(task))" />
                             </MudTooltip>
-                            <MudTooltip Text="Reassign">
-                                <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small"
-                                               Disabled="@_busy" OnClick="@(() => Reassign(task))" />
-                            </MudTooltip>
+                            @if (CanAssign)
+                            {
+                                <MudTooltip Text="Reassign">
+                                    <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small"
+                                                   Disabled="@_busy" OnClick="@(() => Reassign(task))" />
+                                </MudTooltip>
+                            }
                             <MudTooltip Text="Add ad-hoc task">
                                 <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Small"
                                                Disabled="@_busy" OnClick="@(() => AddAdHoc(task))" />
@@ -492,6 +495,20 @@
     /// <summary>Who the actions are performed as. A host with authentication passes the
     /// signed-in user; the demo passes a picker's selection.</summary>
     [Parameter, EditorRequired] public string ActorId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this user may decide who does the work — pre-assigning a step before it is
+    /// reached, and reassigning an open one.
+    ///
+    /// <para>Defaults to true, so a host that does not distinguish deciding from doing is
+    /// unaffected. Pass false and the Assign, Change and Reassign controls are not drawn.</para>
+    ///
+    /// <para><b>This hides controls; it does not stop anything.</b> The engine asks the
+    /// host's <c>IWorkflowAuthorizationPolicy</c> on every attempt, and that is the gate. A
+    /// hidden button is a courtesy to somebody who would be refused, not a defence against
+    /// somebody who means it.</para>
+    /// </summary>
+    [Parameter] public bool CanAssign { get; set; } = true;
 
     /// <summary>Raised after anything that changes the run, so a host can refresh
     /// whatever it shows alongside — a document's status, a progress bar.</summary>
