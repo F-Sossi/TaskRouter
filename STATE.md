@@ -1,7 +1,10 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
+context. Last updated **2026-10-06**: `0.1.0-preview.7` and `preview.8` — a completed task
+names who did it, and a host can hide the assignment controls. The integration was also
+re-done against a newer TRDIS export; that work lives in the private deployment repository.
+Before that, **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
 needs no members of its own, `AddTaskRouterFor<T>()`, and startup wiring diagnostics —
 shipped as `0.1.0-preview.5`, with a defect in it fixed by `0.1.0-preview.6`. Then
 `0.1.0-preview.7`: completing a task hands it to whoever completed it. Before that, workflow duplication, assignment business rules
@@ -13,7 +16,12 @@ from somebody using it. Before that: shipping the runner and inbox, and acting o
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
 
-**Where the session ended (2026-10-05):** `main` is clean and pushed, 0 warnings,
+**Where the session ended (2026-10-06):** `main` clean and pushed, 0 warnings, 490/490 green,
+`0.1.0-preview.8` published. The host integration was rebuilt from scratch against a newer
+TRDIS export — 715 files had moved and the old patch no longer applied — and now carries the
+assignment claim and the task/current-step dashboard. See the deployment repository.
+
+**Previously (2026-10-05):** `main` is clean and pushed, 0 warnings,
 490/490 green. **Published: `0.1.0-preview.7`** of all four packages, verified against the
 registry rather than against a green CI run. The host consumes it with no
 `-p:TaskRouterVersion=` override: 0 warnings, 2,179 tests green across its five suites.
