@@ -12,6 +12,12 @@ namespace TaskRouter.Blazor.Http;
 /// <c>ChangeRequest:42</c> into a document number and a link. The server resolves them
 /// through its <c>IWorkflowSubjectResolver</c>.</para>
 ///
+/// <para><b>Requests are relative to the <c>HttpClient</c>'s base address</b>, whatever the
+/// prefix's leading slash says. A root-relative URL replaces the base address's path, so an
+/// app published under a sub-path — <c>https://server/app/</c> — sent every call to
+/// <c>https://server/workflow/…</c>, outside the app. Where the app lives is the base
+/// address's business, and that is configured per environment already.</para>
+///
 /// <para><b>Failures throw here, unlike the runner's reads.</b> An empty inbox renders as
 /// "Nothing is waiting on you", so returning an empty list when the request failed would tell
 /// the user the opposite of the truth. <c>EfWorkflowInboxClient</c> makes exactly the same
@@ -21,9 +27,9 @@ namespace TaskRouter.Blazor.Http;
 public sealed class HttpWorkflowInboxClient(HttpClient http, string prefix = "/workflow")
     : IWorkflowInboxClient
 {
-    private readonly string _url = $"{prefix.TrimEnd('/')}/inbox/items";
+    private readonly string _url = $"{prefix.Trim('/')}/inbox/items";
 
-    private readonly string _unitsUrl = $"{prefix.TrimEnd('/')}/inbox/org-units";
+    private readonly string _unitsUrl = $"{prefix.Trim('/')}/inbox/org-units";
 
     public async Task<IReadOnlyList<InboxItem>> GetInboxAsync(
         string actorId, IReadOnlyList<string>? orgUnits = null, CancellationToken ct = default)

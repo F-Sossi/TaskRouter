@@ -10,7 +10,8 @@
     waited longest is the thing to do.
 
     Rows navigate through a plain MudLink on the host-built SubjectUrl, so this needs no
-    NavigationManager and no idea what a document is.
+    NavigationManager and no idea what a document is. The URL is relative, so the browser
+    resolves it against <base href> and the link follows wherever the app is published.
 *@
 
 <MudStack Spacing="3">

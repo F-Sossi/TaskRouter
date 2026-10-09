@@ -8,7 +8,7 @@
 <MudStack Spacing="3">
     <MudStack Row="true" AlignItems="AlignItems.Center">
         <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
-                       OnClick="@(() => Nav.NavigateTo("/workflows"))" />
+                       OnClick="@(() => Nav.NavigateTo("workflows"))" />
         <MudText Typo="Typo.h5" HtmlTag="h1">Workflow builder</MudText>
     </MudStack>
 
@@ -19,5 +19,5 @@
 @code {
     [Parameter] public int VersionId { get; set; }
 
-    private void OnPublished(int versionId) => Nav.NavigateTo($"/workflows/{versionId}");
+    private void OnPublished(int versionId) => Nav.NavigateTo($"workflows/{versionId}");
 }

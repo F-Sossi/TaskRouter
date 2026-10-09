@@ -15,5 +15,8 @@ public sealed record BranchOption(string Key, string DisplayName);
 /// a deleted document, a subject type this host does not own — and the honest answer is "I do
 /// not know" rather than a fabricated label. A caller that gets nulls falls back to the raw
 /// subject key and renders the row unclickable, which keeps an orphaned task visible.</para>
+///
+/// <para><see cref="Url"/> is relative to the app's base, with no leading slash — see
+/// <c>InboxItem.SubjectUrl</c> for why.</para>
 /// </summary>
 public sealed record SubjectDescriptor(string? Label, string? Subtitle, string? Url);

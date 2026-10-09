@@ -238,7 +238,7 @@ public class RunnerEndpointTests
 
         var row = items.Single(i => i.SubjectLabel == "CR-2026-0200");
 
-        Assert.AreEqual($"/documents/{document.Id}", row.SubjectUrl,
+        Assert.AreEqual($"documents/{document.Id}", row.SubjectUrl,
             "The whole point of this route over /workflow/inbox is that subjects arrive "
             + "resolved -- a WebAssembly host cannot resolve them itself.");
     }

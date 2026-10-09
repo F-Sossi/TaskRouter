@@ -2,6 +2,7 @@ using System.Security.Claims;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,8 +71,15 @@ public sealed class EndpointTestHost : IAsyncDisposable
         Engine = engine;
     }
 
+    /// <param name="pathBase">
+    /// Publishes the app under a sub-path, as a reverse proxy in front of a real deployment
+    /// does: only requests under it reach the app at all, and the client's base address
+    /// points there. A client that builds a root-relative URL escapes the sub-path and gets a
+    /// 404, which is what it gets in production.
+    /// </param>
     public static async Task<EndpointTestHost> CreateAsync(
-        Action<IServiceCollection>? configure = null)
+        Action<IServiceCollection>? configure = null,
+        string? pathBase = null)
     {
         var name = $"WorkflowEndpointTest_{Guid.NewGuid():N}";
         var cs = $"{TestHost.BaseConnectionString};Database={name}";
@@ -118,6 +126,22 @@ public sealed class EndpointTestHost : IAsyncDisposable
 
         var app = builder.Build();
 
+        if (pathBase is not null)
+        {
+            app.Use((ctx, next) =>
+            {
+                if (ctx.Request.Path.StartsWithSegments(pathBase))
+                {
+                    return next();
+                }
+
+                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+                return Task.CompletedTask;
+            });
+
+            app.UsePathBase(pathBase);
+        }
+
         app.Use(async (ctx, next) =>
         {
             var actor = ctx.Request.Headers[ActorHeader].ToString();
@@ -149,9 +173,16 @@ public sealed class EndpointTestHost : IAsyncDisposable
         await db.Database.EnsureCreatedAsync();
         await DemoWorkflowSeeder.SeedAsync(db);
 
+        var client = app.GetTestClient();
+
+        if (pathBase is not null)
+        {
+            client.BaseAddress = new Uri(client.BaseAddress!, pathBase.TrimEnd('/') + "/");
+        }
+
         return new EndpointTestHost(
             app,
-            app.GetTestClient(),
+            client,
             db,
             scope.ServiceProvider.GetRequiredService<IWorkflowEngine>());
     }

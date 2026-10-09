@@ -75,7 +75,7 @@ public interface IWorkflowActorResolver
 ///
 /// <para>The engine stores an opaque <c>(type, id)</c> pair and can say nothing more about
 /// it. It knows a run is about <c>ChangeRequest:42</c>; only the host knows that is
-/// "CR-2026-0042, Pump room rewire" and that it lives at <c>/documents/42</c>.</para>
+/// "CR-2026-0042, Pump room rewire" and that it lives at <c>documents/42</c>.</para>
 ///
 /// <para><b>Batched deliberately.</b> A per-subject signature would make N+1 the default for
 /// every host that implements it — an inbox with forty rows would issue forty queries. One

@@ -136,7 +136,7 @@ public class InboxClientTests
         Assert.AreEqual("Enter Record", item.TaskLabel);
         Assert.AreEqual("CR-2026-0042", item.SubjectLabel);
         Assert.AreEqual("Pump room rewire", item.SubjectSubtitle);
-        Assert.AreEqual($"/documents/{documentId}", item.SubjectUrl);
+        Assert.AreEqual($"documents/{documentId}", item.SubjectUrl);
     }
 
     [TestMethod]

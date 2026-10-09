@@ -220,7 +220,7 @@ public class HttpRunnerClientTests
         var row = items.Single(i => i.SubjectLabel == "CR-2026-0300");
 
         Assert.AreEqual("Pump room rewire", row.SubjectSubtitle);
-        Assert.AreEqual($"/documents/{document.Id}", row.SubjectUrl,
+        Assert.AreEqual($"documents/{document.Id}", row.SubjectUrl,
             "A browser cannot resolve a subject itself, so if this is empty the inbox "
             + "renders rows nobody can click.");
     }
