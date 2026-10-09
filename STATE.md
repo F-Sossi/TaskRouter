@@ -1,7 +1,8 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-06**: `0.1.0-preview.7` and `preview.8` — a completed task
+context. Last updated **2026-10-08**: `0.1.0-preview.9` — URLs resolve against the app's
+base, so a host published under a sub-path works. Before that, **2026-10-06**: `0.1.0-preview.7` and `preview.8` — a completed task
 names who did it, and a host can hide the assignment controls. The integration was also
 re-done against a newer export of the first host; that work lives in its own private repository.
 Before that, **2026-10-05**: the integration ergonomics pass — `IWorkflowDbContext`
@@ -31,6 +32,25 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### `0.1.0-preview.9` — URLs stay under the app's base, 2026-10-08
+
+The first host is published under a sub-path on its servers, and the inbox's document links
+went to the server root. The host built them with a leading slash, and a leading slash makes a
+URL root-relative: it skips `<base href>` entirely. Invisible in development, where the app
+sits at the root.
+
+The library's HTTP clients had the same defect. Their default prefix is `/workflow`, and a
+root-relative request URL replaces the `HttpClient` base address's path, so every call left
+the sub-path. **The clients now trim the prefix's leading slash**, so `"/workflow"` and
+`"workflow"` mean the same thing and requests stay under the base address.
+`PathBaseTests` runs the server behind a sub-path that refuses anything outside it.
+
+`SubjectUrl` is now documented as **relative, with no leading slash**, and the demo builds its
+links that way. There is deliberately no setting for this: where the app lives is already
+configured per environment, as `<base href>` and the base address, and relative URLs follow it.
+The component does not strip a leading slash itself, because a host that already includes its
+path base would then get it twice.
 
 ### `0.1.0-preview.7` — a completed task names who did it, 2026-10-06
 
