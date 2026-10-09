@@ -13,7 +13,7 @@ namespace DemoDocuments.Server.Workflow;
 ///
 /// <para>This is the whole reason the inbox needs a host at all. The engine knows a task
 /// belongs to a run about <c>ChangeRequest:42</c>; only this host knows that is
-/// "CR-2026-0042, Pump room rewire" at <c>/documents/42</c>.</para>
+/// "CR-2026-0042, Pump room rewire" at <c>documents/42</c>.</para>
 /// </summary>
 public sealed class DemoSubjectResolver(DemoDbContext db) : IWorkflowSubjectResolver
 {
@@ -59,7 +59,7 @@ public sealed class DemoSubjectResolver(DemoDbContext db) : IWorkflowSubjectReso
                 resolved[subject] = new SubjectDescriptor(
                     Label: doc.DocNumber,
                     Subtitle: doc.Title,
-                    Url: $"/documents/{doc.Id}");
+                    Url: $"documents/{doc.Id}");
             }
         }
 

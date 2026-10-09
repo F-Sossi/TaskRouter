@@ -80,7 +80,7 @@ public class RunnerSerializationTests
         WorkflowName: "Document Review",
         SubjectLabel: "CR-2026-0042",
         SubjectSubtitle: "Pump room rewire",
-        SubjectUrl: "/documents/42",
+        SubjectUrl: "documents/42",
         BranchKey: "C100",
         IsUnclaimed: true,
         IsBlocked: true,

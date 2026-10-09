@@ -14,7 +14,7 @@
 <MudStack Spacing="3">
     <MudStack Row="true" AlignItems="AlignItems.Center">
         <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
-                       OnClick="@(() => Nav.NavigateTo("/documents"))" />
+                       OnClick="@(() => Nav.NavigateTo("documents"))" />
         <MudText Typo="Typo.h5" HtmlTag="h1">@(_title ?? "Document")</MudText>
         @if (_docNumber is not null)
         {

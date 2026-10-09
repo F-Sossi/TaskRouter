@@ -16,6 +16,12 @@ namespace TaskRouter.Blazor.Http;
 /// and a host that passes a prefix to one has to pass it to the other. The parameter is
 /// named to match.</para>
 ///
+/// <para><b>Requests are relative to the <c>HttpClient</c>'s base address</b>, whatever the
+/// prefix's leading slash says. A root-relative URL replaces the base address's path, so an
+/// app published under a sub-path — <c>https://server/app/</c> — sent every call to
+/// <c>https://server/workflow/…</c>, outside the app. Where the app lives is the base
+/// address's business, and that is configured per environment already.</para>
+///
 /// <para><b>A Blazor Server host should not use this.</b> It can implement the seam against
 /// the engine directly — <c>EfWorkflowBuilderClient</c> does — and routing those calls
 /// through its own HTTP stack adds a network hop, a serialization pass and a second set of
@@ -24,7 +30,7 @@ namespace TaskRouter.Blazor.Http;
 public sealed class HttpWorkflowBuilderClient(HttpClient http, string prefix = "/workflow")
     : IWorkflowBuilderClient
 {
-    private readonly string _root = $"{prefix.TrimEnd('/')}/builder";
+    private readonly string _root = $"{prefix.Trim('/')}/builder";
 
     public async Task<IReadOnlyList<WorkflowSummary>> GetWorkflowsAsync(CancellationToken ct = default) =>
         await GetAsync<List<WorkflowSummary>>($"{_root}/workflows", ct).ConfigureAwait(false);

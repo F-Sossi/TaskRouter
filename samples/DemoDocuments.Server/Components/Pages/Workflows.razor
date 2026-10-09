@@ -12,7 +12,7 @@
         <MudSpacer />
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                    StartIcon="@Icons.Material.Filled.Add"
-                   OnClick="@(() => Nav.NavigateTo("/workflows/new"))">New workflow</MudButton>
+                   OnClick="@(() => Nav.NavigateTo("workflows/new"))">New workflow</MudButton>
     </MudStack>
 
     <MudText Typo="Typo.body2" Class="mud-text-secondary">
@@ -85,11 +85,11 @@
     protected override async Task OnInitializedAsync() =>
         _summaries = [.. await Client.GetWorkflowsAsync()];
 
-    private void Open(int versionId) => Nav.NavigateTo($"/workflows/{versionId}");
+    private void Open(int versionId) => Nav.NavigateTo($"workflows/{versionId}");
 
     private async Task NewDraft(int versionId)
     {
         var draftId = await Client.CreateDraftVersionAsync(versionId);
-        Nav.NavigateTo($"/workflows/{draftId}");
+        Nav.NavigateTo($"workflows/{draftId}");
     }
 }

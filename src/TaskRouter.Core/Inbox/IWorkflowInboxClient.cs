@@ -10,7 +10,7 @@ namespace TaskRouter.Core.Inbox;
 ///
 /// This seam exists specifically because the engine cannot answer the user's actual
 /// question. The engine knows a run is about <c>ChangeRequest:42</c>; only the host knows that is
-/// "CR-2026-0042, Pump room rewire" and that it lives at <c>/documents/42</c>.
+/// "CR-2026-0042, Pump room rewire" and that it lives at <c>documents/42</c>.
 /// </summary>
 public interface IWorkflowInboxClient
 {
@@ -66,6 +66,13 @@ public sealed record InboxOrgUnit(string Key, string DisplayName, bool IsMine);
 /// Where the work happens. A plain string the host builds — there is no routing
 /// abstraction, because the component must not know what a document is. Empty when the
 /// host cannot resolve the subject, which leaves the row visible but not clickable.
+///
+/// <para><b>Relative, with no leading slash</b> — <c>documents/42</c>, not
+/// <c>/documents/42</c>. It is rendered as an <c>href</c> as given, so the browser resolves
+/// a relative link against the page's <c>&lt;base href&gt;</c>, which follows wherever the
+/// app is published. A leading slash skips that and goes to the server's root: invisible in
+/// development, where the app sits there, and a dead link anywhere it is published under a
+/// sub-path.</para>
 /// </param>
 /// <param name="Created">
 /// When the task was created, in <b>UTC</b> — it comes straight from the engine's
