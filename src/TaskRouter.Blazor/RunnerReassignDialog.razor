@@ -10,25 +10,14 @@
                 Reassigning <b>@TaskLabel</b>.
             </MudText>
 
-            <MudSelect T="string" @bind-Value="_actorId" Label="Assign to" Clearable="true"
-                       Variant="Variant.Outlined" HelperText="Leave blank to clear the assignee.">
-                @foreach (var actor in Actors)
-                {
-                    <MudSelectItem T="string" Value="@actor.ActorId">@actor.DisplayName</MudSelectItem>
-                }
-            </MudSelect>
+            <OptionPicker @bind-Value="_actorId" Label="Assign to" Options="ActorOptions"
+                          HelperText="Leave blank to clear the assignee." />
 
             @*  A picker, not a text field. A branch key is an opaque host id, often a row
                 id, so asking a person to type one put "3" on screen where they think in
                 the unit's name. *@
-            <MudSelect T="string" @bind-Value="_branchKey" Label="Org unit" Clearable="true"
-                       Variant="Variant.Outlined"
-                       HelperText="Leave blank to leave the org unit alone.">
-                @foreach (var unit in OrgUnits)
-                {
-                    <MudSelectItem T="string" Value="@unit.Key">@unit.DisplayName</MudSelectItem>
-                }
-            </MudSelect>
+            <OptionPicker @bind-Value="_branchKey" Label="Org unit" Options="OrgUnitOptions"
+                          HelperText="Leave blank to leave the org unit alone." />
 
             @if (_branchKey is not null && !OrgUnits.Any(u => u.Key == _branchKey))
             {
@@ -63,10 +52,16 @@
     private string? _branchKey;
     private string? _note;
 
+    private IReadOnlyList<KeyValuePair<string, string>> ActorOptions { get; set; } = [];
+    private IReadOnlyList<KeyValuePair<string, string>> OrgUnitOptions { get; set; } = [];
+
     protected override void OnInitialized()
     {
         _actorId = CurrentActorId;
         _branchKey = CurrentBranchKey;
+
+        ActorOptions = [.. Actors.Select(a => KeyValuePair.Create(a.ActorId, a.DisplayName))];
+        OrgUnitOptions = [.. OrgUnits.Select(u => KeyValuePair.Create(u.Key, u.DisplayName))];
     }
 
     private void Save() => Dialog.Close(DialogResult.Ok(

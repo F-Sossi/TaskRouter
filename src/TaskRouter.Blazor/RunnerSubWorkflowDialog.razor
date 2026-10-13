@@ -35,25 +35,13 @@
                 came from whoever was named, so delegating to a person meant silently
                 delegating to their section, and delegating to nobody meant inheriting the
                 parent's. Defaults to the parent's, which is what it used to do. *@
-            <MudSelect T="string" @bind-Value="_assignToBranchKey" Label="Org unit"
-                       Variant="Variant.Outlined" Clearable="true"
-                       HelperText="Every review inside the sub-workflow resolves against this unit.">
-                @foreach (var unit in OrgUnits)
-                {
-                    <MudSelectItem T="string" Value="@unit.Key">@unit.DisplayName</MudSelectItem>
-                }
-            </MudSelect>
+            <OptionPicker @bind-Value="_assignToBranchKey" Label="Org unit" Options="OrgUnitOptions"
+                          HelperText="Every review inside the sub-workflow resolves against this unit." />
 
             @*  Optional on purpose: handing a chain to a section with nobody named yet is
                 how work reaches a section's queue for somebody there to pick up. *@
-            <MudSelect T="string" @bind-Value="_assignToActorId" Label="Assign to (optional)"
-                       Variant="Variant.Outlined" Clearable="true"
-                       HelperText="Leave blank to hand it to the unit rather than a person.">
-                @foreach (var actor in Actors)
-                {
-                    <MudSelectItem T="string" Value="@actor.ActorId">@actor.DisplayName</MudSelectItem>
-                }
-            </MudSelect>
+            <OptionPicker @bind-Value="_assignToActorId" Label="Assign to (optional)" Options="ActorOptions"
+                          HelperText="Leave blank to hand it to the unit rather than a person." />
 
             @if (Selected is { IsBlocking: true })
             {
@@ -98,6 +86,9 @@
     private string? _notes;
     private string? _error;
 
+    private IReadOnlyList<KeyValuePair<string, string>> ActorOptions { get; set; } = [];
+    private IReadOnlyList<KeyValuePair<string, string>> OrgUnitOptions { get; set; } = [];
+
     private SubWorkflowOptionView? Selected =>
         Options.FirstOrDefault(o => o.SubWorkflowDefinitionId == _definitionId);
 
@@ -108,6 +99,9 @@
         // Only when the directory still lists it. Starting on a unit that no longer exists
         // would hand the chain to nothing.
         _assignToBranchKey = OrgUnits.Any(u => u.Key == CurrentBranchKey) ? CurrentBranchKey : null;
+
+        ActorOptions = [.. Actors.Select(a => KeyValuePair.Create(a.ActorId, a.DisplayName))];
+        OrgUnitOptions = [.. OrgUnits.Select(u => KeyValuePair.Create(u.Key, u.DisplayName))];
     }
 
     private void Save()
