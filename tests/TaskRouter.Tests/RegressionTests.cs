@@ -243,12 +243,17 @@ public class RegressionTests
         (await _host.Engine.CompleteTaskAsync(
             entryTaskId, DemoWorkflowSeeder.Outcomes.Rejected, "user-originator")).Unwrap();
 
-        // Enter Record rejects straight to Close Document, which is terminal and
-        // declares no outcomes -- nothing routes onward, so there is nothing to select.
+        // Enter Record rejects straight to Close Document, which is terminal.
         var close = await _host.Db.WorkflowTasks
             .Include(t => t.TaskDefinition)
             .SingleAsync(t => t.WorkflowRunId == runId
                            && t.TaskDefinition!.DisplayName == "Close Document");
+
+        // A workflow like this no longer validates, but ones published before that rule are
+        // still running, and the engine must go on letting them finish.
+        await _host.Db.WorkflowTaskOutcomes
+            .Where(o => o.TaskDefinitionId == close.TaskDefinitionId)
+            .ExecuteDeleteAsync();
 
         var result = await _host.Engine.CompleteTaskAsync(close.Id, "done", "user-originator");
 

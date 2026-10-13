@@ -285,7 +285,7 @@ public class DocumentTaskServiceTests
             .Include(t => t.TaskDefinition)
             .FirstAsync(t => t.TaskDefinition!.DisplayName == "Close Document");
 
-        (await _svc.CompleteTaskAsync(close.Id, "approved", "user-originator")).Unwrap();
+        (await _svc.CompleteTaskAsync(close.Id, DemoWorkflowSeeder.Outcomes.Closed, "user-originator")).Unwrap();
 
         var status = (await _svc.GetWorkflowStatusAsync(_documentId, DemoDocumentType.ChangeRequest)).Unwrap();
         Assert.AreEqual("Complete", status.OverallStatus);

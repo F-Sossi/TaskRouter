@@ -40,6 +40,7 @@ public static class WorkflowDefinitionValidator
         var edges = BuildEdges(tasks, byId, errors);
 
         ValidateOutcomeCoverage(tasks, errors);
+        ValidateCompletable(tasks, errors);
         ValidateForkRules(tasks, errors);
 
         if (version.EntryTaskDefinitionId is { } entryId && byId.ContainsKey(entryId))
@@ -248,6 +249,27 @@ public static class WorkflowDefinitionValidator
             {
                 errors.Add(new("OUTCOME_UNROUTED",
                     $"Task '{Label(t)}' has no route for outcome(s): {string.Join(", ", missing)}.", t.Id));
+            }
+        }
+    }
+
+    /// <summary>
+    /// A task is completed by choosing one of its outcomes, so one that declares none can
+    /// never be finished from a screen — and when it is the terminal task, neither can the
+    /// run. The engine itself accepts any key for such a task, which is how this went
+    /// unnoticed: the workflow validated, published and ran, and stopped at the last step.
+    ///
+    /// <para>Only the tasks nothing else speaks for. A mainline task that is not terminal
+    /// needs a route, a route needs an outcome, and <c>DEAD_END</c> already says so.</para>
+    /// </summary>
+    private static void ValidateCompletable(List<WorkflowTaskDefinition> tasks, List<ValidationError> errors)
+    {
+        foreach (var t in tasks.Where(t => t.IsTerminal || t.IsAdHoc))
+        {
+            if (!t.ValidOutcomes.Any(o => !o.IsArchived))
+            {
+                errors.Add(new("NO_OUTCOME",
+                    $"Task '{Label(t)}' declares no outcomes, so nobody could complete it.", t.Id));
             }
         }
     }

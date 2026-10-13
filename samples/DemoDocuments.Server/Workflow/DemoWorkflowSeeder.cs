@@ -34,6 +34,7 @@ public static class DemoWorkflowSeeder
     {
         public const string Approved = "approved";
         public const string Rejected = "rejected";
+        public const string Closed = "closed";
     }
 
     public static async Task<int> SeedAsync(DemoDbContext db, CancellationToken ct = default)
@@ -207,6 +208,10 @@ public static class DemoWorkflowSeeder
             Outcome(d, Outcomes.Approved, "Approved", 1);
             Outcome(d, Outcomes.Rejected, "Rejected", 2);
         }
+
+        // The last step still has to be finished by somebody, and a task is finished by
+        // choosing an outcome. With none declared the run could never close from a screen.
+        Outcome(closeDocument, Outcomes.Closed, "Closed", 1);
 
         Route(enterRecord, Outcomes.Approved, provideInput);
         Route(enterRecord, Outcomes.Rejected, closeDocument);

@@ -332,6 +332,7 @@ public class BuilderClientTests
             DisplayName = "Close",
             IsTerminal = true
         };
+        close.Outcomes.Add(new OutcomeEditModel { OutcomeKey = "closed", DisplayName = "Closed" });
 
         review.Routes.Add(new RouteEditModel { OutcomeKey = "approved", NextTaskLocalId = close.LocalId });
 

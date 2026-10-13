@@ -90,6 +90,23 @@ public class PublishingTests
         draft.Tasks.Add(entry);
         db.WorkflowTaskDefinitions.Add(entry);
 
+        // A task is completed by choosing an outcome, so a version whose only task declares
+        // none does not validate.
+        var done = new TaskOutcomeDefinition
+        {
+            TaskDefinitionId = 0,
+            TaskDefinition = entry,
+            OutcomeKey = "done",
+            DisplayName = "Done",
+            Order = 1,
+            CreatorId = Actor,
+            ModifierId = Actor,
+            Created = now,
+            Modified = now
+        };
+        entry.ValidOutcomes.Add(done);
+        db.WorkflowTaskOutcomes.Add(done);
+
         return Task.FromResult((definition, draft, entry));
     }
 
