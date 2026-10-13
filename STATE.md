@@ -1,7 +1,8 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-08**: `0.1.0-preview.9` — URLs resolve against the app's
+context. Last updated **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
+base whether or not it wrote them relative. Before that, **2026-10-08**: `0.1.0-preview.9` — URLs resolve against the app's
 base, so a host published under a sub-path works. Before that, **2026-10-06**: `0.1.0-preview.7` and `preview.8` — a completed task
 names who did it, and a host can hide the assignment controls. The integration was also
 re-done against a newer export of the first host; that work lives in its own private repository.
@@ -33,7 +34,7 @@ older than the fixes worth shipping — so the work went out as `preview.3` rath
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
 
-### Unreleased — a leading slash is the host's to write, 2026-10-12
+### `0.1.0-preview.10` — a leading slash is the host's to write, 2026-10-12
 
 `preview.9` asked hosts for relative URLs and the first host did not get there, in two
 opposite directions. Its inbox links kept their leading slash and still went to the server
@@ -53,7 +54,7 @@ answered by looking at the base first. What it cannot tell apart is a page whose
 segment is the sub-path's own name, `/app/app/…`, which is read as carrying the base.
 
 `InboxLinkTests` renders the component and reads the `href`; it is the first test here that
-renders anything. On branch `base-aware-urls`, 515/515, not yet released.
+renders anything. 515/515, 0 warnings.
 
 ### `0.1.0-preview.9` — URLs stay under the app's base, 2026-10-08
 
