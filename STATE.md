@@ -35,6 +35,32 @@ older than the fixes worth shipping — so the work went out as `preview.3` rath
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
 
+### Unreleased — a task nobody could finish, 2026-10-13
+
+Issue #3. A task is completed by choosing one of its outcomes, and the runner draws one button
+per outcome — so a task that declared none could not be finished from a screen, and when it
+was the terminal task neither could the run. Nothing said so: the workflow validated,
+published, ran, and stopped at its last step. The demo's own "Close Document" was one, and so
+is the first host's.
+
+Three changes, because the rule alone would have left every run already stuck where it was.
+
+1. **The validator refuses it.** `NO_OUTCOME`, for a terminal or ad-hoc task with no
+   unarchived outcome. A mainline task that is not terminal needs a route, a route needs an
+   outcome, and `DEAD_END` already speaks for those. **A host whose seeded workflow has an
+   outcome-less terminal step can no longer re-save or publish it** until the step gets one.
+2. **The runner offers "Complete" for a task that declares none**, sending the key
+   `completed`. The engine has always accepted any key for such a task, so workflows published
+   before the rule finish without being republished.
+3. **The builder adds it.** Switching a task to Terminal with no outcomes adds "Complete",
+   where the author can see and change it, and the task dialog will not save a terminal or
+   ad-hoc task with none. It does not guess when the host publishes a list of outcomes that
+   lacks `completed` — a key the host cannot read is worse than asking.
+
+The runner half was driven in a browser against the demo: a run parked on a final step whose
+outcomes had been deleted showed Complete, and clicking it closed the run at 100%. The
+builder's switch was **not** driven in a browser; what it adds is covered by tests.
+
 ### `0.1.0-preview.11` — pick a person by typing, 2026-10-13
 
 Issue #5. The reassign and sub-workflow dialogs listed every person in one select, which was

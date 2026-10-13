@@ -95,7 +95,8 @@
                     <MudSwitch T="bool" @bind-Value="_edit.IsBlocking" Label="Blocks its parent" Color="Color.Primary" />
                 </MudItem>
                 <MudItem xs="6">
-                    <MudSwitch T="bool" @bind-Value="_edit.IsTerminal" Label="Terminal" Color="Color.Primary" />
+                    <MudSwitch T="bool" @bind-Value="_edit.IsTerminal" @bind-Value:after="OnTerminalChanged"
+                               Label="Terminal" Color="Color.Primary" />
                 </MudItem>
                 <MudItem xs="6">
                     <MudSwitch T="bool" Value="_edit.IsForkable"
@@ -464,11 +465,36 @@
         _error = null;
     }
 
+    /// <summary>
+    /// Gives a step that has just been made the last one a way to be finished.
+    ///
+    /// <para>Nothing routes on from a terminal task, so it is the one place an author has
+    /// no reason to think about outcomes — and a task with none cannot be completed, which
+    /// left whole runs stuck on their final step. Added where it can be seen and changed,
+    /// rather than silently on save.</para>
+    /// </summary>
+    private void OnTerminalChanged()
+    {
+        if (_edit.IsTerminal && _edit.Outcomes.Count == 0 && DefaultOutcome.For(_outcomes) is { } outcome)
+        {
+            _edit.Outcomes.Add(outcome);
+        }
+    }
+
     private void Save()
     {
         if (string.IsNullOrWhiteSpace(_edit.TaskTypeKey))
         {
             _error = "A task type is required.";
+            return;
+        }
+
+        // The same rule the validator applies on publish, said here while the author is
+        // still looking at the task it is about.
+        if ((_edit.IsTerminal || _edit.IsAdHoc) && _edit.Outcomes.Count == 0)
+        {
+            _error = "Add at least one outcome. Choosing one is how this task gets "
+                + "completed, so without any nobody could finish it.";
             return;
         }
 

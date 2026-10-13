@@ -415,12 +415,6 @@
                                     </MudButton>
                                 }
 
-                                @if (Outcomes(task.Id).Count == 0)
-                                {
-                                    <MudText Typo="Typo.caption" Color="Color.Warning">
-                                        This task defines no outcomes, so it cannot be completed.
-                                    </MudText>
-                                }
                             }
 
                             <MudSpacer />
@@ -636,7 +630,9 @@
 
             foreach (var task in _detail.Tasks.Where(t => t.CanComplete))
             {
-                _outcomes[task.Id] = await Client.GetOutcomesAsync(task.Id);
+                // A task that declares none still has to be finishable. Workflows published
+                // before the validator insisted on one are still running, and stopped here.
+                _outcomes[task.Id] = DefaultOutcome.IfNone(await Client.GetOutcomesAsync(task.Id));
             }
 
             // Prefer the convergence task's view: once branches have closed it is the
