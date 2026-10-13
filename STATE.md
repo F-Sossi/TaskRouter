@@ -1,7 +1,8 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
+context. Last updated **2026-10-13**: `0.1.0-preview.11` — people and org units are picked by
+typing rather than scrolling. Before that, **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
 base whether or not it wrote them relative. Before that, **2026-10-08**: `0.1.0-preview.9` — URLs resolve against the app's
 base, so a host published under a sub-path works. Before that, **2026-10-06**: `0.1.0-preview.7` and `preview.8` — a completed task
 names who did it, and a host can hide the assignment controls. The integration was also
@@ -34,7 +35,7 @@ older than the fixes worth shipping — so the work went out as `preview.3` rath
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
 
-### Unreleased — pick a person by typing, 2026-10-13
+### `0.1.0-preview.11` — pick a person by typing, 2026-10-13
 
 Issue #5. The reassign and sub-workflow dialogs listed every person in one select, which was
 fine for the demo's handful and unusable for a host with several hundred. Both dialogs' person
