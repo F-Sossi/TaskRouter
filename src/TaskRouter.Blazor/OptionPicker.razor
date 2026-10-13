@@ -1,0 +1,59 @@
+@*  Picks one person or one org unit by typing part of the name.
+
+    A plain select was fine for the demo's five people and unusable for a host's several
+    hundred: the whole directory rendered into one list to be scrolled. This shows a short
+    list and narrows it as somebody types.
+
+    The value is still the opaque key, exactly as it was with the select, so nothing that
+    reads it changes. *@
+
+<MudAutocomplete T="string" Value="Value" ValueChanged="ValueChanged"
+                 SearchFunc="Search" ToStringFunc="LabelFor"
+                 MaxItems="MaxShown" ResetValueOnEmptyText="true" Clearable="true"
+                 Label="@Label" HelperText="@HelperText" Variant="Variant.Outlined"
+                 Placeholder="Type a name to search">
+    <MoreItemsTemplate>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary px-4 py-2">
+            Showing the first @MaxShown. Keep typing to narrow it down.
+        </MudText>
+    </MoreItemsTemplate>
+    <NoItemsTemplate>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary px-4 py-2">
+            Nothing matches.
+        </MudText>
+    </NoItemsTemplate>
+</MudAutocomplete>
+
+@code {
+    /// <summary>How many matches are listed before it asks for more typing instead.</summary>
+    internal const int MaxShown = 20;
+
+    /// <summary>What may be picked: the opaque key, and the name shown for it.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<KeyValuePair<string, string>> Options { get; set; } = [];
+
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? HelperText { get; set; }
+
+    /// <summary>
+    /// The name for a key, or the key itself when the list no longer has it — somebody who
+    /// has left, a unit since reorganised. Showing the raw key beats showing nothing, which
+    /// reads as "unassigned".
+    /// </summary>
+    private string? LabelFor(string? key) =>
+        key is null ? null : Options.FirstOrDefault(o => o.Key == key).Value ?? key;
+
+    private Task<IEnumerable<string>> Search(string? text, CancellationToken ct)
+    {
+        // Opening the list with something already picked passes that pick's name as the
+        // text, which would narrow the list to the one thing already chosen.
+        if (Value is not null && text == LabelFor(Value))
+        {
+            text = null;
+        }
+
+        return Task.FromResult(OptionSearch.Find(Options, text).Select(o => o.Key));
+    }
+}

@@ -34,6 +34,24 @@ older than the fixes worth shipping — so the work went out as `preview.3` rath
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
 
+### Unreleased — pick a person by typing, 2026-10-13
+
+Issue #5. The reassign and sub-workflow dialogs listed every person in one select, which was
+fine for the demo's handful and unusable for a host with several hundred. Both dialogs' person
+and org-unit pickers are now `OptionPicker`, a `MudAutocomplete` over the same opaque keys:
+it shows the first 20, says so, and narrows as somebody types. Every word typed has to appear
+in the name, in any order and any case (`OptionSearch`), so it does not matter which way
+round a host writes names. A key the list no longer has shows as the key, not as a blank.
+
+The whole directory still comes down in one `GetActorsAsync` call — this fixes finding
+somebody, not fetching them. Searching on the server would need a new seam and has not been
+asked for. The fork and add-branch dialogs' multi-select section pickers are unchanged.
+
+Driven in a browser against the demo padded to 300 people: the cap, the hint, narrowing and
+selection all behave. Saving from the dialog was **not** seen through to a stored assignment
+there, because the demo's authorization policy refuses `PreAssignTask` for everybody ("no
+task to authorize against") — which is the demo's gap, on `main` too, and worth fixing.
+
 ### `0.1.0-preview.10` — a leading slash is the host's to write, 2026-10-12
 
 `preview.9` asked hosts for relative URLs and the first host did not get there, in two
