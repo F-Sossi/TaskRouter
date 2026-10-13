@@ -15,6 +15,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="TaskRouter.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       Kept level with every other TaskRouter package at 10.0.10 rather than tracking the
       newest patch. A PackageReference version is a floor, and a library that floors higher

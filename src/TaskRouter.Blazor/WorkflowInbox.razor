@@ -1,6 +1,7 @@
 @implements IDisposable
 
 @inject IWorkflowInboxClient Client
+@inject NavigationManager Nav
 
 @*
     What is waiting on one person, and where to go and do it.
@@ -10,8 +11,8 @@
     waited longest is the thing to do.
 
     Rows navigate through a plain MudLink on the host-built SubjectUrl, so this needs no
-    NavigationManager and no idea what a document is. The URL is relative, so the browser
-    resolves it against <base href> and the link follows wherever the app is published.
+    idea what a document is. The URL is made relative first, so the browser resolves it
+    against <base href> and the link follows wherever the app is published -- see Link.
 *@
 
 <MudStack Spacing="3">
@@ -90,7 +91,7 @@
             <RowTemplate>
                 <MudTd DataLabel="Task">
                     <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
-                        <MudLink Href="@context.SubjectUrl" Underline="Underline.Hover"
+                        <MudLink Href="@Link(context.SubjectUrl)" Underline="Underline.Hover"
                                  Disabled="@string.IsNullOrEmpty(context.SubjectUrl)">
                             @context.TaskLabel
                         </MudLink>
@@ -195,6 +196,14 @@
         _loadedFor = ActorId;
         await LoadAsync();
     }
+
+    /// <summary>
+    /// A row's link, kept under the app's base. A host that built it with a leading slash
+    /// meant a page in this app, and unaltered that goes to the server's root — a dead link
+    /// wherever the app is published under a sub-path, and invisible in development.
+    /// </summary>
+    private string Link(string subjectUrl) =>
+        AppRelativeUrl.From(subjectUrl, new Uri(Nav.BaseUri).AbsolutePath);
 
     /// <summary>Re-polls. Public so a host can refresh after something elsewhere on the
     /// page changes a run.</summary>

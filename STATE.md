@@ -33,6 +33,28 @@ older than the fixes worth shipping — so the work went out as `preview.3` rath
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
 
+### Unreleased — a leading slash is the host's to write, 2026-10-12
+
+`preview.9` asked hosts for relative URLs and the first host did not get there, in two
+opposite directions. Its inbox links kept their leading slash and still went to the server
+root (issue #6). And it had worked the sub-path out for itself and passed the HTTP clients a
+prefix that already carried it — which `preview.9`'s trim turned into the sub-path twice, so
+**every workflow call from that wiring 404s on `preview.9` wherever the app is not at the
+root.** Reproduced in `PathBaseTests` before anything was changed.
+
+Both are reasonable things to write, so both now work. `AppRelativeUrl` takes the base's own
+path off the front if it is there, then the slash, and what is left is relative either way.
+The three HTTP clients run their prefix through it against the base address, and
+`WorkflowInbox` runs `SubjectUrl` through it against `NavigationManager.BaseUri`.
+
+This reverses the last paragraph of the `preview.9` entry below. The objection there — a host
+that already includes its path base gets it twice — was right about blind trimming and is
+answered by looking at the base first. What it cannot tell apart is a page whose first
+segment is the sub-path's own name, `/app/app/…`, which is read as carrying the base.
+
+`InboxLinkTests` renders the component and reads the `href`; it is the first test here that
+renders anything. On branch `base-aware-urls`, 515/515, not yet released.
+
 ### `0.1.0-preview.9` — URLs stay under the app's base, 2026-10-08
 
 The first host is published under a sub-path on its servers, and the inbox's document links
