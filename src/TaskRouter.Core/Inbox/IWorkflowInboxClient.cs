@@ -67,12 +67,15 @@ public sealed record InboxOrgUnit(string Key, string DisplayName, bool IsMine);
 /// abstraction, because the component must not know what a document is. Empty when the
 /// host cannot resolve the subject, which leaves the row visible but not clickable.
 ///
-/// <para><b>Relative, with no leading slash</b> — <c>documents/42</c>, not
-/// <c>/documents/42</c>. It is rendered as an <c>href</c> as given, so the browser resolves
-/// a relative link against the page's <c>&lt;base href&gt;</c>, which follows wherever the
+/// <para><b>Relative to the app's base</b> — <c>documents/42</c>. The browser resolves a
+/// relative link against the page's <c>&lt;base href&gt;</c>, which follows wherever the
 /// app is published. A leading slash skips that and goes to the server's root: invisible in
 /// development, where the app sits there, and a dead link anywhere it is published under a
 /// sub-path.</para>
+///
+/// <para>The inbox component therefore makes it relative before rendering it, so
+/// <c>/documents/42</c> and a URL already carrying the sub-path, <c>/app/documents/42</c>,
+/// both land on the same page. A host rendering this itself has to do the same.</para>
 /// </param>
 /// <param name="Created">
 /// When the task was created, in <b>UTC</b> — it comes straight from the engine's

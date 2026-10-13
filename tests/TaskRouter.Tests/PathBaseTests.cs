@@ -67,4 +67,31 @@ public class PathBaseTests
         Assert.IsNotEmpty(
             await new HttpWorkflowBuilderClient(_host.Client, "workflow").GetWorkflowsAsync());
     }
+
+    [TestMethod]
+    public async Task A_prefix_that_already_carries_the_base_path_is_not_applied_twice()
+    {
+        // What a host writes when it works the sub-path out for itself: the base address's
+        // path with the prefix on the end. Trimming the leading slash alone turned this into
+        // "app/workflow" under a base of "/app/", which is "/app/app/workflow".
+        Assert.IsNotEmpty(
+            await new HttpWorkflowBuilderClient(_host.Client, "/app/workflow").GetWorkflowsAsync());
+    }
+
+    [TestMethod]
+    public async Task Every_client_accepts_a_prefix_that_carries_the_base_path()
+    {
+        var definitionId = await _host.Db.WorkflowDefinitions
+            .Where(d => !d.IsSubWorkflow).Select(d => d.Id).FirstAsync();
+
+        var run = (await _host.Engine.StartRunAsync(
+            new WorkflowSubject("ChangeRequest", "1"), definitionId, "user-a")).Unwrap();
+
+        _host.Client.DefaultRequestHeaders.Add(EndpointTestHost.ActorHeader, "user-a");
+
+        Assert.IsNotNull(await new HttpWorkflowRunnerClient(_host.Client, "/app/workflow")
+            .GetRunAsync(run.Id, "user-a"));
+        Assert.IsNotNull(await new HttpWorkflowInboxClient(_host.Client, "/app/workflow")
+            .GetInboxAsync("user-a"));
+    }
 }
