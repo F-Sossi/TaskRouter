@@ -198,7 +198,9 @@ else
                     }
                     @if (task.IsTerminal)
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Dark">terminal</MudChip>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Dark">
+                            @(task.CompletesAutomatically ? "terminal, closes itself" : "terminal")
+                        </MudChip>
                     }
                     @if (task.IsAdHoc)
                     {
@@ -617,7 +619,8 @@ else
             // Ad-hoc tasks are excluded, as they are from the entry-task picker: they
             // sit outside the routed graph. They are not cut off from sub-workflows --
             // an attachment scoped to "any task" is offered on every task, ad-hoc included.
-            { x => x.Tasks, _model!.Tasks.Where(t => !t.IsAdHoc).ToList() }
+            // Terminal tasks are excluded because nothing may be attached to them.
+            { x => x.Tasks, _model!.Tasks.Where(t => !t.IsAdHoc && !t.IsTerminal).ToList() }
         };
 
         var dialog = await Dialogs.ShowAsync<SubWorkflowAttachDialog>(

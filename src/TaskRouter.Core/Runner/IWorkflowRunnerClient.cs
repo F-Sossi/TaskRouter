@@ -256,6 +256,10 @@ public sealed record RunDetail(
 /// main chain — which is what the runner did, leaving delegated work looking like steps of
 /// the workflow that delegated it.</para>
 /// </param>
+/// <param name="IsTerminal">
+/// Whether this is a last step. Nothing is added under or delegated from one, so a
+/// renderer uses it to leave those actions off rather than offer what would be refused.
+/// </param>
 public sealed record RunTaskView(
     int Id,
     int TaskDefinitionId,
@@ -284,7 +288,8 @@ public sealed record RunTaskView(
     bool CanComplete,
     DateTime? OverdueFiredAt,
     string? AssignedBranchLabel = null,
-    int? SubWorkflowInstanceId = null);
+    int? SubWorkflowInstanceId = null,
+    bool IsTerminal = false);
 
 /// <summary>
 /// An outcome a task may be completed with. <see cref="IsRework"/> marks one that routes

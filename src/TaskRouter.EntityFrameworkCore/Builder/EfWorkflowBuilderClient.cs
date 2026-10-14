@@ -655,6 +655,7 @@ public sealed class EfWorkflowBuilderClient(
                 IsForkable = task.IsForkable,
                 IsConvergencePoint = task.IsConvergencePoint,
                 IsTerminal = task.IsTerminal,
+                CompletesAutomatically = task.CompletesAutomatically,
                 AssignmentRoleKey = NullIfBlank(task.AssignmentRoleKey),
                 ReminderLeadTimeMinutes = task.ReminderLeadTimeMinutes,
                 CreatorId = Actor,
@@ -941,6 +942,7 @@ public sealed class EfWorkflowBuilderClient(
                 IsForkable = task.IsForkable,
                 IsConvergencePoint = task.IsConvergencePoint,
                 IsTerminal = task.IsTerminal,
+                CompletesAutomatically = task.CompletesAutomatically,
                 AssignmentRoleKey = task.AssignmentRoleKey,
                 ReminderLeadTimeMinutes = task.ReminderLeadTimeMinutes,
                 Outcomes = [.. task.ValidOutcomes
@@ -1056,6 +1058,7 @@ public sealed class EfWorkflowBuilderClient(
                 IsForkable = task.IsForkable,
                 IsConvergencePoint = task.IsConvergencePoint,
                 IsTerminal = task.IsTerminal,
+                CompletesAutomatically = task.CompletesAutomatically,
                 AssignmentRoleKey = task.AssignmentRoleKey
             };
 
@@ -1100,7 +1103,7 @@ public sealed class EfWorkflowBuilderClient(
             version.Tasks.Add(row);
         }
 
-        // Without this the four attachment rules in the validator are unreachable from
+        // Without this the attachment rules in the validator are unreachable from
         // ValidateAsync, which is the only validation the builder UI sees before a save.
         version.SubWorkflowAttachments =
         [

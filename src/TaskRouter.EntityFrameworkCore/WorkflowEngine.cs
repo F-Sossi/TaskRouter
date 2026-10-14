@@ -23,10 +23,24 @@ public sealed partial class WorkflowEngine(
     /// rolled back.
     /// </summary>
     private Task<T> InTransactionAsync<T>(Func<CancellationToken, Task<T>> work, CancellationToken ct) =>
-        WorkflowTransaction.ExecuteAsync(db, work, ct, postCommit);
+        WorkflowTransaction.ExecuteAsync(db, async token =>
+        {
+            // Cleared on entry because the execution strategy may run this more than once,
+            // and a retry must not complete tasks queued by the attempt that rolled back.
+            _completesAutomatically.Clear();
+
+            var result = await work(token).ConfigureAwait(false);
+
+            await CompleteAutomaticallyAsync(token).ConfigureAwait(false);
+            return result;
+        }, ct, postCommit);
 
     private Task InTransactionAsync(Func<CancellationToken, Task> work, CancellationToken ct) =>
-        WorkflowTransaction.ExecuteAsync(db, work, ct, postCommit);
+        InTransactionAsync(async token =>
+        {
+            await work(token).ConfigureAwait(false);
+            return 0;
+        }, ct);
 
     /// <summary>
     /// Raises an engine event. In-transaction triggers run now; after-commit ones are
@@ -232,70 +246,98 @@ public sealed partial class WorkflowEngine(
 
             await ValidateCompletableAsync(task, outcomeKey, token).ConfigureAwait(false);
 
-            var now = DateTime.UtcNow;
-
-            // Whoever signed it off is who did it.
-            //
-            // Anybody permitted may complete a task, not only the person it names -- covering
-            // for somebody on leave is ordinary -- and the task used to go on carrying the
-            // original name, so a list of completed work credited the wrong person and the
-            // only record of the truth was ModifierId and the log.
-            //
-            // The assignment on a finished task is not a plan any more: nobody is going to do
-            // it next. The one useful question it can answer is "who did this", so it answers
-            // that. The org unit is left alone -- a stand-in signing off does not move the
-            // work to their section, and every role key downstream resolves against it.
-            var previousAssignee = task.AssignedToActorId;
-            var handedOver = !string.Equals(previousAssignee, actorId, StringComparison.Ordinal);
-
-            if (handedOver)
-            {
-                task.AssignedToActorId = actorId;
-            }
-
-            task.Status = WorkflowTaskStatus.Completed;
-            task.OutcomeKey = outcomeKey;
-            task.CompletedDate = now;
-            task.Notes = notes ?? task.Notes;
-            task.ModifierId = actorId;
-            task.Modified = now;
-
-            if (handedOver)
-            {
-                // Said out loud rather than overwritten silently: "why does this say I did it"
-                // needs an answer, and the name that was there is otherwise gone.
-                Log(task.Id, "Reassigned",
-                    previousAssignee is null
-                        ? "Completed by somebody who was not assigned it; it was unclaimed."
-                        : $"Completed by somebody who was not assigned it; it was {previousAssignee}.",
-                    actorId, now);
-            }
-
-            Log(task.Id, "Completed", $"Outcome: {outcomeKey}", actorId, now);
-            await db.SaveChangesAsync(token).ConfigureAwait(false);
-
-            await RouteFromAsync(task, outcomeKey, actorId, now, token).ConfigureAwait(false);
-
-            var branch = task.ForkGroupId is null
-                ? null
-                : new BranchContext(task.ForkGroupId, task.ForkManifestId, task.AssignedBranchKey, []);
-
-            await FireAsync(task, WorkflowEventKind.TaskCompleted, actorId, branch, token)
+            await FinishAsync(task, outcomeKey, actorId, notes, automatically: false, token)
                 .ConfigureAwait(false);
-
-            if (task.ForkGroupId is not null)
-            {
-                await FireAsync(task, WorkflowEventKind.BranchCompleted, actorId, branch, token)
-                    .ConfigureAwait(false);
-            }
-
-            if (task.SubWorkflowInstanceId is { } instanceId)
-            {
-                await MaybeCompleteInstanceAsync(instanceId, actorId, now, token).ConfigureAwait(false);
-            }
-
-            await MaybeCompleteRunAsync(task.WorkflowRunId, actorId, now, token).ConfigureAwait(false);
         }, ct));
+
+    /// <summary>
+    /// Marks a task completed and does everything that follows from it: routing, events,
+    /// and closing the sub-workflow instance and run if nothing is left open. Shared by a
+    /// person completing a task and a terminal task closing itself, so the two cannot
+    /// disagree about what completion means. Callers authorize and validate first.
+    /// </summary>
+    private async Task FinishAsync(
+        WorkflowTask task,
+        string outcomeKey,
+        string actorId,
+        string? notes,
+        bool automatically,
+        CancellationToken token)
+    {
+        var now = DateTime.UtcNow;
+
+        // Whoever signed it off is who did it.
+        //
+        // Anybody permitted may complete a task, not only the person it names -- covering
+        // for somebody on leave is ordinary -- and the task used to go on carrying the
+        // original name, so a list of completed work credited the wrong person and the
+        // only record of the truth was ModifierId and the log.
+        //
+        // The assignment on a finished task is not a plan any more: nobody is going to do
+        // it next. The one useful question it can answer is "who did this", so it answers
+        // that. The org unit is left alone -- a stand-in signing off does not move the
+        // work to their section, and every role key downstream resolves against it.
+        var previousAssignee = task.AssignedToActorId;
+        var handedOver = !string.Equals(previousAssignee, actorId, StringComparison.Ordinal);
+
+        if (handedOver)
+        {
+            task.AssignedToActorId = actorId;
+        }
+
+        task.Status = WorkflowTaskStatus.Completed;
+        task.OutcomeKey = outcomeKey;
+        task.CompletedDate = now;
+        task.Notes = notes ?? task.Notes;
+        task.ModifierId = actorId;
+        task.Modified = now;
+
+        // Nobody stood in for anybody when a task closed itself, so there is no hand-over to
+        // explain -- only the fact that it was automatic, which the completion entry says.
+        if (handedOver && !automatically)
+        {
+            // Said out loud rather than overwritten silently: "why does this say I did it"
+            // needs an answer, and the name that was there is otherwise gone.
+            Log(task.Id, "Reassigned",
+                previousAssignee is null
+                    ? "Completed by somebody who was not assigned it; it was unclaimed."
+                    : $"Completed by somebody who was not assigned it; it was {previousAssignee}.",
+                actorId, now);
+        }
+
+        Log(task.Id, "Completed",
+            automatically
+                ? $"Completed automatically when it was reached. Outcome: {outcomeKey}"
+                : $"Outcome: {outcomeKey}",
+            actorId, now);
+        await db.SaveChangesAsync(token).ConfigureAwait(false);
+
+        await RouteFromAsync(task, outcomeKey, actorId, now, token).ConfigureAwait(false);
+
+        var branch = task.ForkGroupId is null
+            ? null
+            : new BranchContext(task.ForkGroupId, task.ForkManifestId, task.AssignedBranchKey, []);
+
+        await FireAsync(task, WorkflowEventKind.TaskCompleted, actorId, branch, token)
+            .ConfigureAwait(false);
+
+        if (task.ForkGroupId is not null)
+        {
+            await FireAsync(task, WorkflowEventKind.BranchCompleted, actorId, branch, token)
+                .ConfigureAwait(false);
+        }
+
+        if (task.SubWorkflowInstanceId is { } instanceId)
+        {
+            await MaybeCompleteInstanceAsync(instanceId, actorId, now, token).ConfigureAwait(false);
+        }
+
+        // This may have been the last thing holding up a parent that closes itself.
+        await RequeueIfCompletesAutomaticallyAsync(task.ParentTaskId, actorId, token)
+            .ConfigureAwait(false);
+
+        await MaybeCompleteRunAsync(task.WorkflowRunId, actorId, now, token).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Creates follow-on tasks for a completed task, handling convergence when the
@@ -629,32 +671,7 @@ public sealed partial class WorkflowEngine(
             throw new InvalidOperationException($"Task {task.Id} was superseded by a fork.");
         }
 
-        // Blocking children must be *finished*, not merely not-completed.
-        // The original engine's finding H1: it tested `Status != Completed`, so a cancelled blocking
-        // child blocked its parent forever with no way to clear it.
-        //
-        // A positive list, not a negative one -- and this is the second time that distinction
-        // has cost something. The negative form read "not Completed and not Cancelled", which
-        // silently admitted Forked: a blocking child superseded by a fork went on blocking its
-        // parent for good, while the fork's own branches ran to completion and the screen
-        // showed the chain as finished. The inbox query says it outright: "the negative form
-        // silently admits any status added to the enum later, and Forked is exactly the value
-        // somebody writing this by hand leaves out."
-        //
-        // Open means open. Anything else -- completed, cancelled, superseded by a fork -- is
-        // a child nobody is waiting on.
-        var blocking = await db.WorkflowTasks
-            .Include(t => t.TaskDefinition)
-            .Where(t => t.ParentTaskId == task.Id
-                     && (t.Status == WorkflowTaskStatus.NotStarted
-                      || t.Status == WorkflowTaskStatus.InProgress))
-            .ToListAsync(ct).ConfigureAwait(false);
-
-        var names = blocking
-            .Where(t => t.TaskDefinition?.IsBlocking == true)
-            .Select(t => t.TaskDefinition!.DisplayName ?? t.TaskDefinition.TaskType?.DisplayName ?? $"#{t.Id}")
-            .Distinct()
-            .ToList();
+        var names = await BlockingTaskNamesAsync(task.Id, ct).ConfigureAwait(false);
 
         if (names.Count > 0)
         {
@@ -672,6 +689,40 @@ public sealed partial class WorkflowEngine(
         }
 
         await ValidateOutcomeAsync(task, outcomeKey, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Open blocking child tasks that would stop a task completing. The sibling of
+    /// <see cref="BlockingInstanceNamesAsync"/>; a task is blocked if either is non-empty.
+    /// </summary>
+    private async Task<List<string>> BlockingTaskNamesAsync(int taskId, CancellationToken ct)
+    {
+        // Blocking children must be *finished*, not merely not-completed.
+        // The original engine's finding H1: it tested `Status != Completed`, so a cancelled blocking
+        // child blocked its parent forever with no way to clear it.
+        //
+        // A positive list, not a negative one -- and this is the second time that distinction
+        // has cost something. The negative form read "not Completed and not Cancelled", which
+        // silently admitted Forked: a blocking child superseded by a fork went on blocking its
+        // parent for good, while the fork's own branches ran to completion and the screen
+        // showed the chain as finished. The inbox query says it outright: "the negative form
+        // silently admits any status added to the enum later, and Forked is exactly the value
+        // somebody writing this by hand leaves out."
+        //
+        // Open means open. Anything else -- completed, cancelled, superseded by a fork -- is
+        // a child nobody is waiting on.
+        var blocking = await db.WorkflowTasks
+            .Include(t => t.TaskDefinition)
+            .Where(t => t.ParentTaskId == taskId
+                     && (t.Status == WorkflowTaskStatus.NotStarted
+                      || t.Status == WorkflowTaskStatus.InProgress))
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        return blocking
+            .Where(t => t.TaskDefinition?.IsBlocking == true)
+            .Select(t => t.TaskDefinition!.DisplayName ?? t.TaskDefinition.TaskType?.DisplayName ?? $"#{t.Id}")
+            .Distinct()
+            .ToList();
     }
 
     /// <summary>
@@ -981,6 +1032,13 @@ public sealed partial class WorkflowEngine(
         };
 
         task.DueDate = await ResolveDueDateAsync(runId, task, ct).ConfigureAwait(false);
+
+        // Here rather than at each creation path for the same reason as the due date: every
+        // path that can reach a terminal task comes through this funnel.
+        if (definition is { IsTerminal: true, CompletesAutomatically: true })
+        {
+            _completesAutomatically.Add((task, actorId));
+        }
 
         return task;
     }

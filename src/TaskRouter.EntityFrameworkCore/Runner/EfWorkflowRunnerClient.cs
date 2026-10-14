@@ -97,6 +97,7 @@ public sealed class EfWorkflowRunnerClient(
                 d.IsBlocking,
                 d.IsForkable,
                 d.IsConvergencePoint,
+                d.IsTerminal,
                 d.WorkflowDefinitionVersionId
             })
             .ToDictionaryAsync(d => d.Id, ct)
@@ -190,10 +191,13 @@ public sealed class EfWorkflowRunnerClient(
                 IsForkable: d?.IsForkable ?? false,
                 RunningSubWorkflowCount: subWorkflowCounts.GetValueOrDefault(t.Id).Running,
                 BlockingSubWorkflowCount: subWorkflowCounts.GetValueOrDefault(t.Id).Blocking,
-                HasSubWorkflowOptions: attachments.Any(a =>
-                    a.WorkflowDefinitionVersionId == versionId
-                    && (a.TaskDefinitionId is null
-                     || a.TaskDefinitionId == t.TaskDefinitionId)),
+                // Never on a terminal task, which the engine refuses to delegate from --
+                // a version-wide attachment would otherwise light the icon up there too.
+                HasSubWorkflowOptions: d?.IsTerminal != true
+                    && attachments.Any(a =>
+                        a.WorkflowDefinitionVersionId == versionId
+                        && (a.TaskDefinitionId is null
+                         || a.TaskDefinitionId == t.TaskDefinitionId)),
                 IsConvergencePoint: d?.IsConvergencePoint ?? false,
                 ForkGroupId: t.ForkGroupId,
                 Created: created.GetValueOrDefault(t.Id),
@@ -204,7 +208,8 @@ public sealed class EfWorkflowRunnerClient(
                                      && branchLabels.TryGetValue(key, out var label)
                     ? label
                     : null,
-                SubWorkflowInstanceId: t.SubWorkflowInstanceId));
+                SubWorkflowInstanceId: t.SubWorkflowInstanceId,
+                IsTerminal: d?.IsTerminal ?? false));
         }
 
         tasks = [.. tasks.OrderBy(t => t.Created).ThenBy(t => t.Id)];
@@ -598,17 +603,24 @@ public sealed class EfWorkflowRunnerClient(
     public async Task<IReadOnlyList<AdHocOption>> GetAdHocOptionsAsync(
         int taskId, CancellationToken ct = default)
     {
-        var versionId = await db.WorkflowTasks
+        var task = await db.WorkflowTasks
             .AsNoTracking()
             .Where(t => t.Id == taskId)
-            .Select(t => (int?)t.TaskDefinition!.WorkflowDefinitionVersionId)
+            .Select(t => new
+            {
+                VersionId = t.TaskDefinition!.WorkflowDefinitionVersionId,
+                t.TaskDefinition.IsTerminal
+            })
             .SingleOrDefaultAsync(ct)
             .ConfigureAwait(false);
 
-        if (versionId is null)
+        // Nothing is added under a terminal task; the engine refuses it.
+        if (task is null || task.IsTerminal)
         {
             return [];
         }
+
+        var versionId = task.VersionId;
 
         return await db.WorkflowTaskDefinitions
             .AsNoTracking()
