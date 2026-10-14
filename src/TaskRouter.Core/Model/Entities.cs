@@ -295,6 +295,17 @@ public class WorkflowTaskDefinition : WorkflowEntity
     public bool IsConvergencePoint { get; set; }
     public bool IsTerminal { get; set; }
 
+    /// <summary>
+    /// A terminal task that closes itself the moment it is reached, with its first outcome,
+    /// credited to whoever completed the step before it. Ignored on a task that is not
+    /// terminal.
+    ///
+    /// <para>False in the database by default, so a terminal task written before this
+    /// existed keeps waiting for a person as it always did; the builder switches it on for a
+    /// task newly made terminal.</para>
+    /// </summary>
+    public bool CompletesAutomatically { get; set; }
+
     /// <summary>Opaque role key resolved by the host's IWorkflowAssignmentResolver.
     /// The original system hardcoded an org-role enum here, which is why this is a
     /// string the host defines rather than a fixed set the library ships.</summary>

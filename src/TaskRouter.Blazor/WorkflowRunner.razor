@@ -448,10 +448,13 @@
                                                    Disabled="@_busy" OnClick="@(() => Reassign(task))" />
                                 </MudTooltip>
                             }
-                            <MudTooltip Text="Add ad-hoc task">
-                                <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Small"
-                                               Disabled="@_busy" OnClick="@(() => AddAdHoc(task))" />
-                            </MudTooltip>
+                            @if (!task.IsTerminal)
+                            {
+                                <MudTooltip Text="Add ad-hoc task">
+                                    <MudIconButton Icon="@Icons.Material.Filled.PlaylistAdd" Size="Size.Small"
+                                                   Disabled="@_busy" OnClick="@(() => AddAdHoc(task))" />
+                                </MudTooltip>
+                            }
                             <MudTooltip Text="Cancel task">
                                 <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small"
                                                Disabled="@_busy" OnClick="@(() => Cancel(task))" />

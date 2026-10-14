@@ -72,7 +72,7 @@
     /// <summary>Definitions flagged as reusable sub-workflows.</summary>
     [Parameter] public IReadOnlyList<SubWorkflowDefinitionOption> Available { get; set; } = [];
 
-    /// <summary>Tasks an attachment may be scoped to. Ad-hoc tasks are excluded by the caller.</summary>
+    /// <summary>Tasks an attachment may be scoped to. Ad-hoc and terminal tasks are excluded by the caller.</summary>
     [Parameter] public IReadOnlyList<TaskEditModel> Tasks { get; set; } = [];
 
     /// <summary>

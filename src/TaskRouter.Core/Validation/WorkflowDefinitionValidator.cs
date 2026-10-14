@@ -68,6 +68,17 @@ public static class WorkflowDefinitionValidator
                     taskId));
             }
 
+            // The end of the line is not somewhere to delegate from, and a blocking chain
+            // hung there would hold open a task meant to close itself. A version-wide
+            // attachment is fine: the engine simply does not offer it on a terminal task.
+            if (attachment.TaskDefinitionId is { } attachedTo
+                && tasks.FirstOrDefault(t => t.Id == attachedTo) is { IsTerminal: true } terminal)
+            {
+                errors.Add(new("attachment.terminal-task",
+                    $"Terminal task '{Label(terminal)}' cannot have a sub-workflow attached.",
+                    attachedTo));
+            }
+
             // Only checkable when the caller loaded the navigation. The validator is a
             // pure function over an entity graph and cannot go to the database, so a
             // caller that did not Include it gets no opinion rather than a false alarm.

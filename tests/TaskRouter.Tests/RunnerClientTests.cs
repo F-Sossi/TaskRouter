@@ -277,6 +277,43 @@ public class RunnerClientTests
     }
 
     [TestMethod]
+    public async Task A_terminal_task_offers_nothing_to_add_under_it_or_delegate_from_it()
+    {
+        var started = await _client.StartTestRunAsync(await PublishedVersionIdAsync(), "tester");
+        var entry = (await _client.GetRunAsync(started.RunId, "tester"))!.Tasks.Single();
+
+        // Enter Record rejects straight to Close Document, the last step.
+        Assert.IsTrue((await _client.CompleteAsync(entry.Id, "rejected", "tester", null)).Success);
+
+        // Available on any task, so the only thing keeping it off Close Document is the rule.
+        var subWorkflowId = await _host.Db.WorkflowDefinitions
+            .Where(d => d.IsSubWorkflow).Select(d => d.Id).SingleAsync();
+
+        _host.Db.WorkflowSubWorkflowAttachments.Add(new SubWorkflowAttachment
+        {
+            SubWorkflowDefinitionId = subWorkflowId,
+            WorkflowDefinitionVersionId = await PublishedVersionIdAsync(),
+            TaskDefinitionId = null,
+            IsBlocking = true,
+            CreatorId = "seed",
+            ModifierId = "seed",
+            Created = DateTime.UtcNow,
+            Modified = DateTime.UtcNow
+        });
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        var close = (await _client.GetRunAsync(started.RunId, "tester"))!
+            .Tasks.Single(t => t.Label == "Close Document");
+
+        Assert.IsTrue(close.IsTerminal);
+        Assert.IsFalse(close.HasSubWorkflowOptions,
+            "The icon would offer a sub-workflow the engine refuses to start.");
+        Assert.IsEmpty(await _client.GetAdHocOptionsAsync(close.Id));
+    }
+
+    [TestMethod]
     public async Task An_ad_hoc_task_can_be_added_from_the_options_the_run_pinned()
     {
         var started = await _client.StartTestRunAsync(await PublishedVersionIdAsync(), "tester");

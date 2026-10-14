@@ -55,6 +55,10 @@ public sealed partial class WorkflowEngine
                     .ConfigureAwait(false);
             }
 
+            // A cancelled blocker unblocks its parent as surely as a finished one does.
+            await RequeueIfCompletesAutomaticallyAsync(task.ParentTaskId, actorId, token)
+                .ConfigureAwait(false);
+
             await MaybeCompleteRunAsync(task.WorkflowRunId, actorId, now, token).ConfigureAwait(false);
         }, ct));
 
@@ -199,6 +203,14 @@ public sealed partial class WorkflowEngine
             {
                 throw new InvalidOperationException(
                     $"Task definition {taskDefinitionId} is not marked ad-hoc.");
+            }
+
+            // A terminal task is the end of the line: nothing follows it, nothing is
+            // delegated from it, and nothing is added under it.
+            if (parent.TaskDefinition!.IsTerminal)
+            {
+                throw new InvalidOperationException(
+                    "Cannot add an ad-hoc task to a terminal task.");
             }
 
             var now = DateTime.UtcNow;

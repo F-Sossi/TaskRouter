@@ -58,6 +58,13 @@ public sealed class TaskEditModel
     public bool IsConvergencePoint { get; set; }
     public bool IsTerminal { get; set; }
 
+    /// <summary>
+    /// Closes itself when reached — see
+    /// <see cref="TaskRouter.Core.Model.WorkflowTaskDefinition.CompletesAutomatically"/>.
+    /// Only meaningful with <see cref="IsTerminal"/>.
+    /// </summary>
+    public bool CompletesAutomatically { get; set; }
+
     public string? AssignmentRoleKey { get; set; }
 
     /// <summary>
@@ -108,6 +115,7 @@ public sealed class TaskEditModel
         IsForkable = IsForkable,
         IsConvergencePoint = IsConvergencePoint,
         IsTerminal = IsTerminal,
+        CompletesAutomatically = CompletesAutomatically,
         AssignmentRoleKey = AssignmentRoleKey,
         // The minutes, never the days property: copying days would round-trip the value
         // through a division and a multiplication for no reason, and Math.Round is not
@@ -133,6 +141,7 @@ public sealed class TaskEditModel
         IsForkable = source.IsForkable;
         IsConvergencePoint = source.IsConvergencePoint;
         IsTerminal = source.IsTerminal;
+        CompletesAutomatically = source.CompletesAutomatically;
         AssignmentRoleKey = source.AssignmentRoleKey;
         ReminderLeadTimeMinutes = source.ReminderLeadTimeMinutes;
 

@@ -1,7 +1,8 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
+context. Last updated **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
+reached, and nothing can be added under one. Before that, **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
 the validator and finishable in the runner. Before that, `0.1.0-preview.11` — people and org units are picked by
 typing rather than scrolling. Before that, **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
 base whether or not it wrote them relative. Before that, **2026-10-08**: `0.1.0-preview.9` — URLs resolve against the app's
@@ -35,6 +36,45 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### `0.1.0-preview.13` — the last step closes itself, 2026-10-14
+
+Issue #7. A terminal task usually has nothing left to decide, so making a person press a button
+on it left runs open until somebody got round to it.
+
+1. **`WorkflowTaskDefinition.CompletesAutomatically`.** A new column, so **a host needs a
+   migration** (bit, not null, default 0) before taking this version — the demo's is
+   `TerminalTasksCompleteAutomatically`. Default 0 is deliberate: every terminal task written
+   before this keeps waiting for a person, published versions and runs in flight included.
+2. **The builder switches it on for a task newly made terminal** ("Closes itself when
+   reached"), off when it stops being terminal, and the task card says "terminal, closes
+   itself".
+3. **The engine completes it when it is reached**, on every creation path (the `NewTaskAsync`
+   funnel queues it), with its first outcome by `Order` — `completed` if it declares none —
+   credited to whoever completed the step before it, and logged as "Completed automatically
+   when it was reached". The queue drains at the end of the operation inside the same
+   transaction, so the step before raises its events first and the run closes in the same
+   commit. Main line, fork branches and sub-workflows alike.
+4. **If something blocks it, it waits** and is queued again whenever a blocker finishes or is
+   cancelled. Unreachable in a valid workflow after point 5; it exists for data published before.
+5. **Terminal means terminal.** The validator refuses a sub-workflow attached to a terminal
+   task by name (`attachment.terminal-task`); the builder's attachment picker leaves terminal
+   tasks out; the engine refuses to start a sub-workflow or add an ad-hoc task on one; the
+   runner offers neither. A version-wide attachment is still valid — it simply is not offered
+   on the terminal task. `RunTaskView` gains `IsTerminal`, appended with a default.
+
+Driven in a browser against the demo: the switch read off for the seeded Close Document,
+toggling Terminal hid it and turned it on, and the published version 2 stored it on while
+version 1 stayed off. A document started on version 2 closed both tasks and the run with one
+completion. That completion went through the demo's endpoint rather than the runner, and the
+hidden ad-hoc and sub-workflow buttons were **not** seen on screen: the runner's "Acting as"
+select will not take a selection under browser automation, so those rest on tests.
+
+**A lesson from `preview.12`:** its entry above says a host's outcome-less seeded workflow
+could no longer be re-saved. That understated it — the first host's seeder publishes through
+`PublishWithEntryTaskAsync`, so seeding itself threw and every test that seeds failed until
+the host gave its last step an outcome. A new validator rule breaks seeders, not just the
+builder; say so when shipping one.
 
 ### `0.1.0-preview.12` — a task nobody could finish, 2026-10-13
 

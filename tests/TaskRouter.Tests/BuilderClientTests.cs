@@ -314,6 +314,26 @@ public class BuilderClientTests
     // ──────────────────────────── Building from nothing ────────────────────────────
 
     [TestMethod]
+    public async Task Whether_a_terminal_task_closes_itself_survives_a_save()
+    {
+        var publishedId = await SeededVersionIdAsync();
+        var model = (await _client.GetWorkflowAsync(publishedId))!;
+
+        var close = model.Tasks.Single(t => t.IsTerminal);
+        Assert.IsFalse(close.CompletesAutomatically,
+            "Seeded before the setting existed, so it has to read back as off.");
+
+        close.CompletesAutomatically = true;
+
+        var saved = await _client.SaveAsync(model);
+        Assert.IsTrue(saved.Success, string.Join("; ", saved.Errors.Select(e => e.Message)));
+
+        var reloaded = (await _client.GetWorkflowAsync(saved.VersionId))!;
+
+        Assert.IsTrue(reloaded.Tasks.Single(t => t.IsTerminal).CompletesAutomatically);
+    }
+
+    [TestMethod]
     public async Task A_workflow_built_from_scratch_publishes_and_runs()
     {
         var model = new WorkflowEditModel { Name = "Built in the UI", SubjectType = "ChangeRequest" };
@@ -661,13 +681,24 @@ public class BuilderClientTests
     public void A_valid_attachment_produces_no_attachment_errors()
     {
         var version = MinimalPublishableVersion();
+
+        // A step of its own to hang it on: the fixture's only task is terminal, and nothing
+        // may be attached to one of those.
+        var review = new WorkflowTaskDefinition
+        {
+            Id = 2,
+            WorkflowDefinitionVersionId = 1,
+            TaskTypeDefinitionId = 1
+        };
+        version.Tasks.Add(review);
+
         version.SubWorkflowAttachments =
         [
             new SubWorkflowAttachment
             {
                 SubWorkflowDefinitionId = 2,
                 WorkflowDefinitionVersionId = 1,
-                TaskDefinitionId = version.Tasks.Single().Id,
+                TaskDefinitionId = review.Id,
                 IsAutomatic = true
             }
         ];

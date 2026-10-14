@@ -98,6 +98,18 @@
                     <MudSwitch T="bool" @bind-Value="_edit.IsTerminal" @bind-Value:after="OnTerminalChanged"
                                Label="Terminal" Color="Color.Primary" />
                 </MudItem>
+                @if (_edit.IsTerminal)
+                {
+                    <MudItem xs="12">
+                        <MudSwitch T="bool" @bind-Value="_edit.CompletesAutomatically"
+                                   Label="Closes itself when reached" Color="Color.Primary" />
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            Completed with its first outcome as soon as the step before it is,
+                            so nobody has to come back to finish the run. Turn off if someone
+                            needs to sign the end off.
+                        </MudText>
+                    </MudItem>
+                }
                 <MudItem xs="6">
                     <MudSwitch T="bool" Value="_edit.IsForkable"
                                ValueChanged="@(v => { _edit.IsForkable = v; if (v) _edit.IsConvergencePoint = false; })"
@@ -472,9 +484,16 @@
     /// no reason to think about outcomes — and a task with none cannot be completed, which
     /// left whole runs stuck on their final step. Added where it can be seen and changed,
     /// rather than silently on save.</para>
+    ///
+    /// <para>Also switches "closes itself" on, which is what a new last step should do
+    /// unless somebody needs to sign it off.</para>
     /// </summary>
     private void OnTerminalChanged()
     {
+        // On by default for a task newly made terminal, and never left on for one that is
+        // not: the engine ignores it there, and a hidden switch should not keep a value.
+        _edit.CompletesAutomatically = _edit.IsTerminal;
+
         if (_edit.IsTerminal && _edit.Outcomes.Count == 0 && DefaultOutcome.For(_outcomes) is { } outcome)
         {
             _edit.Outcomes.Add(outcome);

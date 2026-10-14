@@ -58,6 +58,15 @@ public sealed partial class WorkflowEngine
                     $"Cannot attach a sub-workflow to a {parent.Status} task.");
             }
 
+            // The end of the line is not somewhere to delegate from. A version-wide
+            // attachment otherwise offers itself here too, and the validator only refuses
+            // ones aimed at a terminal task by name.
+            if (parent.TaskDefinition!.IsTerminal)
+            {
+                throw new InvalidOperationException(
+                    "Cannot attach a sub-workflow to a terminal task.");
+            }
+
             // The version owning the parent's *definition*, not the run's pinned version.
             // They differ when the parent is itself inside a sub-workflow instance, and
             // the definition's version is the right one: a sub-workflow nested under a
@@ -139,6 +148,9 @@ public sealed partial class WorkflowEngine
             await db.SaveChangesAsync(token).ConfigureAwait(false);
 
             await FireSubWorkflowCancelledAsync(instance.ParentTaskId, actorId, token)
+                .ConfigureAwait(false);
+
+            await RequeueIfCompletesAutomaticallyAsync(instance.ParentTaskId, actorId, token)
                 .ConfigureAwait(false);
         }, ct));
 
@@ -446,10 +458,17 @@ public sealed partial class WorkflowEngine
                 .Select(t => new
                 {
                     t.TaskDefinitionId,
-                    VersionId = t.TaskDefinition!.WorkflowDefinitionVersionId
+                    VersionId = t.TaskDefinition!.WorkflowDefinitionVersionId,
+                    t.TaskDefinition.IsTerminal
                 })
                 .SingleOrDefaultAsync(ct).ConfigureAwait(false)
                 ?? throw new WorkflowNotFoundException("Task", taskId.ToString());
+
+            // Nothing to offer on a terminal task: StartSubWorkflowAsync refuses one.
+            if (task.IsTerminal)
+            {
+                return (IReadOnlyList<SubWorkflowOption>)[];
+            }
 
             var attachments = await db.WorkflowSubWorkflowAttachments
                 .Include(a => a.SubWorkflowDefinition)

@@ -164,4 +164,41 @@ public class CompletableTaskTests
     public void The_builder_does_not_guess_outside_a_list_the_host_published() =>
         // A key the host cannot read would be worse than asking the author to pick one.
         Assert.IsNull(DefaultOutcome.For([new OutcomeTypeOption(1, "approved", "Approved")]));
+
+    // ─────────────────── Nothing hangs off the end of the line ───────────────────
+
+    private static SubWorkflowAttachment AttachedTo(int? taskId) => new()
+    {
+        SubWorkflowDefinitionId = 9,
+        WorkflowDefinitionVersionId = 1,
+        TaskDefinitionId = taskId,
+    };
+
+    [TestMethod]
+    public void A_sub_workflow_attached_to_a_terminal_task_is_refused()
+    {
+        var version = Workflow(Task(2, "Close", terminal: true, outcomes: "closed"));
+        version.SubWorkflowAttachments.Add(AttachedTo(2));
+
+        CollectionAssert.Contains(Codes(version), "attachment.terminal-task");
+    }
+
+    [TestMethod]
+    public void A_sub_workflow_available_on_any_task_is_still_allowed()
+    {
+        // The engine just does not offer it on the terminal task.
+        var version = Workflow(Task(2, "Close", terminal: true, outcomes: "closed"));
+        version.SubWorkflowAttachments.Add(AttachedTo(null));
+
+        Assert.IsEmpty(Codes(version));
+    }
+
+    [TestMethod]
+    public void A_sub_workflow_attached_to_any_other_task_is_still_allowed()
+    {
+        var version = Workflow(Task(2, "Close", terminal: true, outcomes: "closed"));
+        version.SubWorkflowAttachments.Add(AttachedTo(1));
+
+        Assert.IsEmpty(Codes(version));
+    }
 }
