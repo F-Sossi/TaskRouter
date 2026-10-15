@@ -113,8 +113,14 @@ internal sealed class FieldWriteScope : IAsyncDisposable
     ///
     /// <para>If the undo itself fails, the scope's writes may be half-reverted, and letting
     /// the workflow carry on would commit them. So the whole transaction is rolled back,
-    /// which makes the caller's final save and commit fail even under LogAndContinue, and an
-    /// <see cref="InvalidOperationException"/> carrying both errors is thrown.</para>
+    /// which makes the caller's final save and commit fail even under LogAndContinue, and a
+    /// <see cref="FieldUpdateUndoFailedException"/> carrying both errors is thrown.</para>
+    ///
+    /// <para>Consequences of that composite worth knowing: it is not a DbUpdateException, so
+    /// the execution strategy will not retry a deadlock (1205) that hit the host's write; an
+    /// OperationCanceledException cause is wrapped in it too, rather than surfacing as
+    /// cancellation; and when the caller started the transaction itself, the caller's own
+    /// commit will fail.</para>
     ///
     /// <para>Deliberately takes no CancellationToken: the cause may itself be cancellation,
     /// and an undo cut short by it would leave exactly the partial state this prevents.</para>
@@ -146,14 +152,24 @@ internal sealed class FieldWriteScope : IAsyncDisposable
                     // save and the commit fail instead.
                     await _transaction.GetDbTransaction().RollbackAsync().ConfigureAwait(false);
                 }
-#pragma warning disable CA1031 // Best effort: the server may already have rolled it back; the undo error is what matters.
+#pragma warning disable CA1031 // Best effort: the undo error is what gets reported.
                 catch (Exception)
-#pragma warning restore CA1031
                 {
+                    // The rollback itself failed. Closing the connection makes the server
+                    // roll back whatever transaction it still holds, so the message below
+                    // stays true; the caller's next save then fails on the closed transaction.
+                    try
+                    {
+                        await _db.Database.GetDbConnection().CloseAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                    }
                 }
+#pragma warning restore CA1031
             }
 
-            throw new InvalidOperationException(
+            throw new FieldUpdateUndoFailedException(
                 $"{cause?.Message ?? "The field update was abandoned"}; undoing it also failed ({undoError.Message}), "
                 + "so the whole operation was rolled back",
                 cause is null ? undoError : new AggregateException(cause, undoError));
@@ -272,6 +288,36 @@ internal sealed class FieldWriteScope : IAsyncDisposable
                     if (ReferenceEquals(back.CurrentValue, entry.Entity))
                     {
                         back.CurrentValue = null;
+                    }
+                }
+            }
+        }
+
+        // A collection with no back-reference (Basket.Fruits with no Fruit.Basket) is not
+        // among the entity's own navigations, so look for it from the principal side.
+        foreach (var foreignKey in entry.Metadata.GetForeignKeys())
+        {
+            if (foreignKey.PrincipalToDependent is not { } navigation || foreignKey.DependentToPrincipal is not null)
+            {
+                continue;
+            }
+
+            var principals = entry.Context.ChangeTracker.Entries()
+                .Where(e => foreignKey.PrincipalEntityType.IsAssignableFrom(e.Metadata))
+                .ToList();
+
+            foreach (var principal in principals)
+            {
+                if (navigation.IsCollection)
+                {
+                    navigation.GetCollectionAccessor()?.Remove(principal.Entity, entry.Entity);
+                }
+                else
+                {
+                    var reference = principal.Navigation(navigation.Name);
+                    if (ReferenceEquals(reference.CurrentValue, entry.Entity))
+                    {
+                        reference.CurrentValue = null;
                     }
                 }
             }

@@ -4,6 +4,8 @@ using Microsoft.Extensions.Logging;
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Model;
 
+using TaskRouter.EntityFrameworkCore.Fields;
+
 namespace TaskRouter.EntityFrameworkCore.Triggers;
 
 public interface IWorkflowTriggerDispatcher
@@ -210,7 +212,12 @@ public sealed class TriggerDispatcher(
             logger.LogError(ex, "Trigger {TriggerKey} failed for task {TaskId}.",
                 definition.TriggerKey, baseContext.Task.Id);
 
-            if (definition.FailurePolicy == TriggerFailurePolicy.FailOperation)
+            // A failed field-update undo has already rolled the whole transaction back. Once
+            // the transaction is dead, "continue" cannot mean anything, and rethrowing here
+            // lets the caller see the real cause instead of SqlClient's complaint that the
+            // transaction has completed.
+            if (definition.FailurePolicy == TriggerFailurePolicy.FailOperation
+                || ex is FieldUpdateUndoFailedException)
             {
                 throw;
             }
