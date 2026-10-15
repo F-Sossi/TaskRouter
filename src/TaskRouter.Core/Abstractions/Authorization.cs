@@ -83,10 +83,10 @@ public sealed record WorkflowAuthorizationContext(
     WorkflowSubject? Subject,
     int? WorkflowDefinitionId)
 {
-    /// <summary>For <see cref="WorkflowOperation.UpdateSubjectFields"/>: the target's key.</summary>
+    /// <summary>For <see cref="WorkflowOperation.UpdateSubjectFields"/>: the target's key; null for every other operation.</summary>
     public string? FieldTarget { get; init; }
 
-    /// <summary>For <see cref="WorkflowOperation.UpdateSubjectFields"/>: the field keys being set.</summary>
+    /// <summary>For <see cref="WorkflowOperation.UpdateSubjectFields"/>: the field keys being set; empty for every other operation.</summary>
     public IReadOnlyList<string> Fields { get; init; } = [];
 }
 

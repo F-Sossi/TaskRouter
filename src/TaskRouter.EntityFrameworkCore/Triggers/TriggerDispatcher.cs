@@ -195,6 +195,7 @@ public sealed class TriggerDispatcher(
             await trigger.ExecuteAsync(context, ct).ConfigureAwait(false);
 
             execution.Status = TriggerExecutionStatus.Succeeded;
+            execution.Detail = context.Report.Detail;
             execution.CompletedAt = DateTime.UtcNow;
         }
         catch (Exception ex)
@@ -203,6 +204,7 @@ public sealed class TriggerDispatcher(
             // into the audit log regardless of what happened (review finding H3).
             execution.Status = TriggerExecutionStatus.Failed;
             execution.Error = ex.Message;
+            execution.Detail = context.Report.Detail;
             execution.CompletedAt = DateTime.UtcNow;
 
             logger.LogError(ex, "Trigger {TriggerKey} failed for task {TaskId}.",

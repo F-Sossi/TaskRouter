@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -32,7 +35,7 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         [
             new("name", "Variable name", TriggerParameterKind.Text, Required: true),
             new("value", "Value", TriggerParameterKind.Text,
-                HelpText: "Supports {task.outcome}, {task.branch}, {task.id}, {event}."),
+                HelpText: "Supports {task.outcome}, {task.branch}, {task.id}, {event}, {actor}, {today}, {today+Nd}, {now}, {var:name}."),
             new("scope", "Scope", TriggerParameterKind.Choice,
                 DefaultValue: "run", Choices: ["run", "task"])
         ],
@@ -45,7 +48,8 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         var name = context.Config.GetString("name")
             ?? throw new InvalidOperationException("Parameter 'name' is required.");
 
-        var value = TriggerTemplate.Render(context.Config.GetString("value"), context);
+        var value = await TriggerTemplate.RenderAsync(context.Config.GetString("value"), context, ct)
+            .ConfigureAwait(false);
 
         await context.Variables.SetAsync(name, value, VariableType.String, ct).ConfigureAwait(false);
     }
@@ -174,12 +178,17 @@ public sealed class NotifyTrigger : IWorkflowTrigger
 
         var recipient = context.Config.GetString("recipient") ?? context.Task.AssignedToActorId;
 
+        var subject = await TriggerTemplate.RenderAsync(context.Config.GetString("subject"), context, ct)
+            .ConfigureAwait(false);
+        var body = await TriggerTemplate.RenderAsync(context.Config.GetString("body"), context, ct)
+            .ConfigureAwait(false);
+
         await sink.SendAsync(new WorkflowNotification(
             context.Subject,
             context.Task.Id,
             recipient,
-            TriggerTemplate.Render(context.Config.GetString("subject"), context) ?? string.Empty,
-            TriggerTemplate.Render(context.Config.GetString("body"), context) ?? string.Empty,
+            subject ?? string.Empty,
+            body ?? string.Empty,
             context.ActorId), ct)
             .ConfigureAwait(false);
     }
@@ -241,7 +250,7 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
 }
 
 /// <summary>Minimal token substitution for trigger configuration values.</summary>
-internal static class TriggerTemplate
+internal static partial class TriggerTemplate
 {
     public static string? Render(string? template, WorkflowTriggerContext context)
     {
@@ -261,4 +270,53 @@ internal static class TriggerTemplate
             .Replace("{subject.type}", context.Subject.SubjectType, StringComparison.OrdinalIgnoreCase)
             .Replace("{subject.id}", context.Subject.SubjectId, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// <see cref="Render"/>, plus the tokens that need the clock, the actor, or the run's
+    /// variables: <c>{actor}</c>, <c>{now}</c>, <c>{today}</c>, <c>{today+Nd}</c>,
+    /// <c>{today-Nd}</c>, <c>{var:name}</c>. Dates render as ISO-8601, UTC. A variable
+    /// that is not set renders empty; any other unknown token passes through literally.
+    /// </summary>
+    public static async Task<string?> RenderAsync(
+        string? template, WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        var rendered = Render(template, context);
+
+        if (string.IsNullOrEmpty(rendered) || !rendered.Contains('{', StringComparison.Ordinal))
+        {
+            return rendered;
+        }
+
+        var now = DateTime.UtcNow;
+
+        rendered = rendered
+            .Replace("{actor}", context.ActorId, StringComparison.OrdinalIgnoreCase)
+            .Replace("{now}", now.ToString("O", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+
+        rendered = TodayToken().Replace(rendered, match =>
+        {
+            var days = match.Groups["n"].Success
+                ? int.Parse(match.Groups["n"].Value, CultureInfo.InvariantCulture)
+                    * (match.Groups["sign"].Value == "-" ? -1 : 1)
+                : 0;
+
+            return now.Date.AddDays(days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        });
+
+        if (VariableToken().IsMatch(rendered))
+        {
+            var variables = await context.Variables.GetAllAsync(ct).ConfigureAwait(false);
+
+            rendered = VariableToken().Replace(rendered, match =>
+                variables.TryGetValue(match.Groups["name"].Value, out var value) ? value ?? string.Empty : string.Empty);
+        }
+
+        return rendered;
+    }
+
+    [GeneratedRegex(@"\{today(?:(?<sign>[+-])(?<n>\d+)d)?\}", RegexOptions.IgnoreCase)]
+    private static partial Regex TodayToken();
+
+    [GeneratedRegex(@"\{var:(?<name>[^}]+)\}", RegexOptions.IgnoreCase)]
+    private static partial Regex VariableToken();
 }

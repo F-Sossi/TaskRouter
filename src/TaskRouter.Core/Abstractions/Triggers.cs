@@ -115,5 +115,6 @@ public sealed class WorkflowTriggerContext
 /// <summary>What a trigger wants recorded about what it did.</summary>
 public sealed class TriggerExecutionReport
 {
+    /// <summary>Free text stored on the execution row; null reports nothing.</summary>
     public string? Detail { get; set; }
 }
