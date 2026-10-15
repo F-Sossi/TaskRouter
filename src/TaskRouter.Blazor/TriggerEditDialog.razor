@@ -145,12 +145,6 @@
     [Parameter] public string? SubjectType { get; set; }
 
     /// <summary>
-    /// Whether this trigger has never been saved. Only a new trigger takes the chosen action's
-    /// dispatch and failure defaults; an existing one keeps what its author chose.
-    /// </summary>
-    [Parameter] public bool IsNew { get; set; }
-
-    /// <summary>
     /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
     /// passes reference types by reference, so binding straight to the parameter wrote
     /// changes into the caller's object the moment they were typed -- and closing with
@@ -185,7 +179,7 @@
         }
         else
         {
-            TriggerSelection.Apply(_edit, descriptor, IsNew);
+            TriggerSelection.Apply(_edit, descriptor);
         }
 
         StateHasChanged();

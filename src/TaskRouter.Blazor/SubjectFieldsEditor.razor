@@ -17,9 +17,13 @@
         Choose what this workflow applies to (its subject type) before updating fields.
     </MudAlert>
 }
+else if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Dense="true">@_loadError</MudAlert>
+}
 else if (_model is null)
 {
-    <MudProgressLinear Indeterminate="true" />
+    <MudProgressLinear Indeterminate="true" aria-label="Loading fields" />
 }
 else if (_model.Targets.Count == 0)
 {
@@ -46,7 +50,7 @@ else
                 var row = _model.Rows[index];
                 var field = row.Field;
 
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudStack @key="row" Row="true" AlignItems="AlignItems.Center" Spacing="2">
                     <MudSelect T="string" Label="Field" Value="row.StoredKey" Dense="true" Style="min-width: 12rem"
                                Variant="Variant.Outlined"
                                ValueChanged="@(key => SetFieldAsync(index, key))">
@@ -87,11 +91,18 @@ else
                             <MudAutocomplete T="string" Label="Value" Value="row.Value" Dense="true"
                                              Variant="Variant.Outlined"
                                              DebounceInterval="300" MaxItems="MaxShown"
+                                             Clearable="@field.IsNullable"
                                              CoerceValue="@(field.Kind == FieldKind.Actor)"
                                              SearchFunc="@((text, ct) => SearchAsync(row, text, ct))"
                                              ToStringFunc="@(v => Label(field.Key, v))"
                                              ValueChanged="@(v => SetValueAsync(row, v))"
-                                             HelperText="@(field.Kind == FieldKind.Actor ? "Or {actor} or {task.assignee}" : null)" />
+                                             HelperText="@(field.Kind == FieldKind.Actor ? "Or {actor} or {task.assignee}" : null)">
+                                <NoItemsTemplate>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary px-4 py-2">
+                                        No matches
+                                    </MudText>
+                                </NoItemsTemplate>
+                            </MudAutocomplete>
                             break;
 
                         case FieldKind.Date:
@@ -115,7 +126,7 @@ else
                     }
 
                     <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
-                                   aria-label="Remove this field" OnClick="@(() => RemoveRowAsync(index))" />
+                                   aria-label="@($"Remove {field?.Label ?? row.StoredKey ?? "empty row"}")" OnClick="@(() => RemoveRowAsync(index))" />
                 </MudStack>
             }
 
@@ -138,6 +149,7 @@ else
 
     private SubjectFieldsEditModel? _model;
     private string? _loadedFor;
+    private string? _loadError;
 
     /// <summary>Names for option values, by "field|value", as searches have returned them.</summary>
     private readonly Dictionary<string, string> _labels = [];
@@ -149,11 +161,44 @@ else
             return;
         }
 
-        _loadedFor = SubjectType;
+        var requested = SubjectType;
+        _loadedFor = requested;
         _model = null;
+        _loadError = null;
 
-        var targets = await Client.GetSubjectFieldsAsync(SubjectType);
+        IReadOnlyList<SubjectTargetInfo> targets;
+
+        try
+        {
+            targets = await Client.GetSubjectFieldsAsync(requested);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (_loadedFor == requested)
+            {
+                // Forget this subject type so the next parameter set tries again.
+                _loadedFor = null;
+                _loadError = "Could not load this subject type's fields.";
+            }
+
+            return;
+        }
+
+        // The subject type changed while this was loading; a newer load owns the editor now.
+        if (_loadedFor != requested)
+        {
+            return;
+        }
+
         _model = SubjectFieldsEditModel.Load(targets, Configuration);
+
+        // Load picks the only target when none is stored; store it, so saving without
+        // touching the editor saves the target the author is looking at.
+        if (_model.TargetKey is not null
+            && Configuration.GetValueOrDefault(SubjectFieldsEditModel.TargetKeyName) is null)
+        {
+            await SaveAsync();
+        }
     }
 
     private async Task<IEnumerable<string>> SearchAsync(

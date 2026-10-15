@@ -25,11 +25,11 @@ public class TriggerSelectionTests
         DefaultDispatch: TriggerDispatchMode.AfterCommit);
 
     [TestMethod]
-    public void A_new_trigger_takes_the_actions_dispatch_and_failure_defaults()
+    public void A_trigger_takes_the_actions_dispatch_and_failure_defaults()
     {
         var edit = new TriggerEditModel();
 
-        TriggerSelection.Apply(edit, UpdateFields, isNew: true);
+        TriggerSelection.Apply(edit, UpdateFields);
 
         Assert.AreEqual("workflow.updateFields", edit.TriggerKey);
         Assert.AreEqual(TriggerDispatchMode.InTransaction, edit.DispatchMode);
@@ -37,32 +37,33 @@ public class TriggerSelectionTests
     }
 
     [TestMethod]
-    public void A_new_trigger_follows_the_action_it_was_switched_to()
+    public void A_trigger_follows_the_action_it_was_switched_to()
     {
         var edit = new TriggerEditModel();
 
-        TriggerSelection.Apply(edit, Webhook, isNew: true);
-        TriggerSelection.Apply(edit, UpdateFields, isNew: true);
+        TriggerSelection.Apply(edit, Webhook);
+        TriggerSelection.Apply(edit, UpdateFields);
 
         Assert.AreEqual(TriggerDispatchMode.InTransaction, edit.DispatchMode);
         Assert.AreEqual(TriggerFailurePolicy.FailOperation, edit.FailurePolicy);
     }
 
     [TestMethod]
-    public void An_existing_trigger_keeps_its_saved_dispatch_and_failure_choice()
+    public void Switching_an_existing_trigger_to_a_field_update_adopts_its_defaults()
     {
+        // A webhook's AfterCommit would leave a refused write nothing to roll back.
         var edit = new TriggerEditModel
         {
             TriggerKey = "workflow.webhook",
-            DispatchMode = TriggerDispatchMode.Background,
+            DispatchMode = TriggerDispatchMode.AfterCommit,
             FailurePolicy = TriggerFailurePolicy.LogAndContinue
         };
 
-        TriggerSelection.Apply(edit, UpdateFields, isNew: false);
+        TriggerSelection.Apply(edit, UpdateFields);
 
         Assert.AreEqual("workflow.updateFields", edit.TriggerKey);
-        Assert.AreEqual(TriggerDispatchMode.Background, edit.DispatchMode);
-        Assert.AreEqual(TriggerFailurePolicy.LogAndContinue, edit.FailurePolicy);
+        Assert.AreEqual(TriggerDispatchMode.InTransaction, edit.DispatchMode);
+        Assert.AreEqual(TriggerFailurePolicy.FailOperation, edit.FailurePolicy);
     }
 
     [TestMethod]
@@ -73,7 +74,7 @@ public class TriggerSelectionTests
             Configuration = new() { ["target"] = "document", ["assignments"] = "[]" }
         };
 
-        TriggerSelection.Apply(edit, Webhook, isNew: true);
+        TriggerSelection.Apply(edit, Webhook);
 
         Assert.HasCount(1, edit.Configuration);
         Assert.AreEqual("https://example.test", edit.Configuration["url"]);
@@ -84,7 +85,7 @@ public class TriggerSelectionTests
     {
         var edit = new TriggerEditModel { Configuration = new() { ["url"] = "https://mine.test" } };
 
-        TriggerSelection.Apply(edit, Webhook, isNew: true);
+        TriggerSelection.Apply(edit, Webhook);
 
         Assert.AreEqual("https://mine.test", edit.Configuration["url"]);
     }
@@ -94,7 +95,7 @@ public class TriggerSelectionTests
     {
         var edit = new TriggerEditModel { Event = WorkflowEventKind.TaskCreated };
 
-        TriggerSelection.Apply(edit, Webhook, isNew: true);
+        TriggerSelection.Apply(edit, Webhook);
 
         Assert.AreEqual(WorkflowEventKind.TaskCompleted, edit.Event);
     }

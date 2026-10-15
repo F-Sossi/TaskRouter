@@ -26,9 +26,12 @@ internal sealed class SubjectFieldsEditModel
     public static SubjectFieldsEditModel Load(
         IReadOnlyList<SubjectTargetInfo> targets, IReadOnlyDictionary<string, string?> configuration)
     {
+        // With only one place the fields could go, asking the author to pick it is a step
+        // that can only be got wrong by forgetting it.
         var model = new SubjectFieldsEditModel(targets)
         {
             TargetKey = configuration.GetValueOrDefault(TargetKeyName)
+                ?? (targets.Count == 1 ? targets[0].Key : null)
         };
 
         IReadOnlyList<FieldAssignment> stored;
@@ -75,7 +78,9 @@ internal sealed class SubjectFieldsEditModel
         var row = Rows[index];
         row.Field = Target?.Fields.FirstOrDefault(f => f.Key == key);
         row.StoredKey = row.Field?.Key;
-        row.Value = null;
+
+        // A switch has no "unset" look: it shows off, so off is what gets saved.
+        row.Value = row.Field?.Kind == FieldKind.Boolean ? "false" : null;
     }
 
     /// <summary>The target's fields, less those other rows already set.</summary>
@@ -85,11 +90,21 @@ internal sealed class SubjectFieldsEditModel
         return [.. (Target?.Fields ?? []).Where(f => !used.Contains(f.Key))];
     }
 
+    /// <summary>
+    /// Writes the target and the assignments. No assignments at all is written as null rather
+    /// than an empty list, so the dialog's required-parameter check stops an update that would
+    /// change nothing at save time, not when it fires.
+    /// </summary>
     public void WriteTo(IDictionary<string, string?> configuration)
     {
         configuration[TargetKeyName] = TargetKey;
-        configuration[AssignmentsKeyName] = FieldAssignments.Serialize(
-            Rows.Where(r => r.StoredKey is not null).Select(r => new FieldAssignment(r.StoredKey!, r.Value)));
+
+        var assignments = Rows
+            .Where(r => r.StoredKey is not null)
+            .Select(r => new FieldAssignment(r.StoredKey!, r.Value))
+            .ToList();
+
+        configuration[AssignmentsKeyName] = assignments.Count == 0 ? null : FieldAssignments.Serialize(assignments);
     }
 
     internal sealed class Row

@@ -10,28 +10,23 @@ namespace TaskRouter.Blazor;
 internal static class TriggerSelection
 {
     /// <summary>
-    /// Points <paramref name="edit"/> at <paramref name="descriptor"/>: drops configuration
-    /// belonging to whatever was selected before, fills in parameter defaults, and moves the
-    /// event onto one the trigger handles.
+    /// Points <paramref name="edit"/> at <paramref name="descriptor"/>: adopts its dispatch
+    /// mode and failure policy, drops configuration belonging to whatever was selected
+    /// before, fills in parameter defaults, and moves the event onto one the trigger handles.
     ///
-    /// <para>Dispatch mode and failure policy follow the descriptor only for a new trigger.
-    /// Those are the trigger's own judgement of how it should run (a field update rolls the
-    /// operation back when a write is refused), and a new trigger has no choice of its own to
-    /// lose. An existing trigger's saved choice was somebody's decision, so changing its action
-    /// leaves it alone.</para>
+    /// <para>Runs only when the action changes, never on reopening a saved trigger, so the
+    /// dispatch and failure choices it replaces were made for a different action. Keeping
+    /// them would be wrong more often than not: a webhook's AfterCommit, carried over to a
+    /// field update, leaves a refused write nothing to roll back.</para>
     /// </summary>
-    public static void Apply(TriggerEditModel edit, TriggerDescriptor descriptor, bool isNew)
+    public static void Apply(TriggerEditModel edit, TriggerDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(edit);
         ArgumentNullException.ThrowIfNull(descriptor);
 
         edit.TriggerKey = descriptor.Key;
-
-        if (isNew)
-        {
-            edit.DispatchMode = descriptor.DefaultDispatch;
-            edit.FailurePolicy = descriptor.DefaultFailurePolicy;
-        }
+        edit.DispatchMode = descriptor.DefaultDispatch;
+        edit.FailurePolicy = descriptor.DefaultFailurePolicy;
 
         var valid = descriptor.Parameters.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var stale in edit.Configuration.Keys.Where(k => !valid.Contains(k)).ToList())

@@ -128,4 +128,59 @@ public class SubjectFieldsEditModelTests
             new[] { new FieldAssignment("Status", "OnHold") },
             FieldAssignments.Parse(configuration["assignments"]).ToArray());
     }
+
+    [TestMethod]
+    public void The_only_target_is_selected_when_none_is_stored()
+    {
+        var model = SubjectFieldsEditModel.Load([Targets[0]], new Dictionary<string, string?>());
+
+        Assert.AreEqual("document", model.TargetKey);
+    }
+
+    [TestMethod]
+    public void No_target_is_chosen_for_the_author_when_there_are_several()
+    {
+        var model = SubjectFieldsEditModel.Load(Targets, new Dictionary<string, string?>());
+
+        Assert.IsNull(model.TargetKey);
+    }
+
+    [TestMethod]
+    public void A_stored_target_is_kept_even_when_it_is_not_the_only_one()
+    {
+        var model = SubjectFieldsEditModel.Load([Targets[0]], new Dictionary<string, string?>
+        {
+            ["target"] = "allWorkItems"
+        });
+
+        Assert.AreEqual("allWorkItems", model.TargetKey);
+    }
+
+    [TestMethod]
+    public void A_boolean_field_starts_as_false_which_is_what_its_switch_shows()
+    {
+        var model = SubjectFieldsEditModel.Load(
+            [new SubjectTargetInfo("document", "This document", FieldCardinality.One,
+                [new("IsUrgent", "Urgent", FieldKind.Boolean, false, [])])],
+            new Dictionary<string, string?>());
+        model.AddRow();
+
+        model.SetField(0, "IsUrgent");
+
+        Assert.AreEqual("false", model.Rows[0].Value);
+    }
+
+    [TestMethod]
+    public void An_update_with_no_fields_writes_no_assignments_so_the_required_check_catches_it()
+    {
+        var model = SubjectFieldsEditModel.Load(Targets, new Dictionary<string, string?>());
+        model.SelectTarget("document");
+        model.AddRow();
+
+        var configuration = new Dictionary<string, string?>();
+        model.WriteTo(configuration);
+
+        Assert.AreEqual("document", configuration["target"]);
+        Assert.IsNull(configuration["assignments"]);
+    }
 }
