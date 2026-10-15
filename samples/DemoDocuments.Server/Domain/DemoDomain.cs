@@ -19,7 +19,8 @@ public enum DocumentStatus
     Scheduled,
     InProgress,
     Complete,
-    Cancelled
+    Cancelled,
+    OnHold
 }
 
 public enum WorkItemStatus

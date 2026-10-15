@@ -228,4 +228,24 @@ public class FieldCatalogTests
 
         Assert.AreEqual("hello", comments.Read(drawing));
     }
+
+    [TestMethod]
+    public void The_demos_catalog_gives_a_change_request_urgency_and_a_drawing_not()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        DemoDocuments.Server.Workflow.DemoWorkflowFields.Configure(fields);
+        var catalog = fields.Build();
+
+        var changeRequest = catalog.Describe("ChangeRequest");
+        var drawing = catalog.Describe("Drawing");
+
+        string[] targets = ["document", "branchWorkItem", "allWorkItems"];
+        CollectionAssert.AreEqual(targets, changeRequest.Select(t => t.Key).ToList());
+        CollectionAssert.AreEqual(targets, drawing.Select(t => t.Key).ToList());
+
+        CollectionAssert.Contains(
+            changeRequest.Single(t => t.Key == "document").Fields.Select(f => f.Key).ToList(), "Urgency");
+        CollectionAssert.DoesNotContain(
+            drawing.Single(t => t.Key == "document").Fields.Select(f => f.Key).ToList(), "Urgency");
+    }
 }
