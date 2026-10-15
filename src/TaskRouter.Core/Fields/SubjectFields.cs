@@ -67,7 +67,14 @@ public static class FieldAssignments
 
         try
         {
-            return JsonSerializer.Deserialize<List<FieldAssignment>>(json, Json) ?? [];
+            var parsed = JsonSerializer.Deserialize<List<FieldAssignment>>(json, Json) ?? [];
+
+            if (parsed.Any(a => a is null || string.IsNullOrWhiteSpace(a.Field)))
+            {
+                throw new FormatException("The field assignments are not valid.");
+            }
+
+            return parsed;
         }
         catch (JsonException ex)
         {

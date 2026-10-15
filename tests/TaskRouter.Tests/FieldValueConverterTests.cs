@@ -86,7 +86,7 @@ public class FieldValueConverterTests
     public void Unparseable_text_says_what_was_wrong()
     {
         Assert.IsFalse(FieldValueConverter.TryConvert("next week", typeof(DateTime), out _, out var error));
-        Assert.AreEqual("'next week' is not a date.", error);
+        Assert.AreEqual("'next week' is not a date (yyyy-MM-dd).", error);
     }
 
     [TestMethod]
@@ -144,5 +144,133 @@ public class FieldValueConverterTests
     public void No_assignments_parse_as_empty()
     {
         Assert.IsEmpty(FieldAssignments.Parse(null));
+    }
+
+    private enum Level
+    {
+        Tier1 = 1,
+        Tier2 = 2
+    }
+
+    [TestMethod]
+    public void An_enum_name_must_match_exactly_with_no_flag_lists_padding_or_numbers()
+    {
+        Assert.IsFalse(FieldValueConverter.TryConvert("Hold, Done", typeof(Phase), out _, out _));
+        Assert.IsFalse(FieldValueConverter.TryConvert(" Hold", typeof(Phase), out _, out _));
+        Assert.IsFalse(FieldValueConverter.TryConvert("4", typeof(Phase), out _, out _));
+        Assert.IsFalse(FieldValueConverter.TryConvert("-1", typeof(Phase), out _, out _));
+        Assert.IsFalse(FieldValueConverter.TryConvert("hold", typeof(Phase), out _, out _));
+    }
+
+    [TestMethod]
+    public void An_enum_member_with_a_digit_in_its_name_is_accepted()
+    {
+        Assert.IsTrue(FieldValueConverter.TryConvert("Tier2", typeof(Level), out var value, out _));
+        Assert.AreEqual(Level.Tier2, value);
+    }
+
+    [TestMethod]
+    public void Dates_must_be_iso()
+    {
+        Assert.IsFalse(FieldValueConverter.TryConvert("10/20/2026", typeof(DateTime), out _, out var error));
+        Assert.AreEqual("'10/20/2026' is not a date (yyyy-MM-dd).", error);
+    }
+
+    [TestMethod]
+    public void The_now_token_round_trips_as_utc()
+    {
+        var now = DateTime.UtcNow;
+
+        Assert.IsTrue(FieldValueConverter.TryConvert(now.ToString("O"), typeof(DateTime), out var value, out _));
+
+        var parsed = (DateTime)value!;
+        Assert.AreEqual(now, parsed);
+        Assert.AreEqual(DateTimeKind.Utc, parsed.Kind);
+    }
+
+    [TestMethod]
+    public void A_date_with_an_offset_becomes_utc()
+    {
+        Assert.IsTrue(FieldValueConverter.TryConvert("2026-10-20T10:00:00+02:00", typeof(DateTime), out var value, out _));
+
+        var parsed = (DateTime)value!;
+        Assert.AreEqual(new DateTime(2026, 10, 20, 8, 0, 0), parsed);
+        Assert.AreEqual(DateTimeKind.Utc, parsed.Kind);
+    }
+
+    [TestMethod]
+    public void A_plain_date_is_midnight_and_unspecified()
+    {
+        Assert.IsTrue(FieldValueConverter.TryConvert("2026-10-20", typeof(DateTime), out var value, out _));
+
+        var parsed = (DateTime)value!;
+        Assert.AreEqual(new DateTime(2026, 10, 20), parsed);
+        Assert.AreEqual(DateTimeKind.Unspecified, parsed.Kind);
+    }
+
+    [TestMethod]
+    public void An_unsupported_type_is_refused_whatever_the_input()
+    {
+        Assert.ThrowsExactly<NotSupportedException>(() => FieldValueConverter.TryConvert(null, typeof(Guid?), out _, out _));
+        Assert.ThrowsExactly<NotSupportedException>(() => FieldValueConverter.TryConvert("x", typeof(Guid), out _, out _));
+    }
+
+    [TestMethod]
+    public void Whitespace_clears_a_nullable_non_text_field_and_is_text_for_a_string()
+    {
+        Assert.IsTrue(FieldValueConverter.TryConvert("  ", typeof(int?), out var cleared, out _));
+        Assert.IsNull(cleared);
+
+        Assert.IsFalse(FieldValueConverter.TryConvert("  ", typeof(int), out _, out var error));
+        Assert.AreEqual("A value is required.", error);
+
+        Assert.IsTrue(FieldValueConverter.TryConvert("  ", typeof(string), out var text, out _));
+        Assert.AreEqual("  ", text);
+    }
+
+    [TestMethod]
+    public void A_double_must_be_finite()
+    {
+        Assert.IsFalse(FieldValueConverter.TryConvert("NaN", typeof(double), out _, out var error));
+        Assert.AreEqual("'NaN' is not a number.", error);
+        Assert.IsFalse(FieldValueConverter.TryConvert("Infinity", typeof(double), out _, out _));
+        Assert.IsFalse(FieldValueConverter.TryConvert("-Infinity", typeof(double), out _, out _));
+    }
+
+    [TestMethod]
+    public void Long_decimal_and_bool_failures_parse_and_report()
+    {
+        Assert.IsTrue(FieldValueConverter.TryConvert("9000000000", typeof(long), out var big, out _));
+        Assert.AreEqual(9000000000L, big);
+
+        Assert.IsTrue(FieldValueConverter.TryConvert("12.50", typeof(decimal), out var money, out _));
+        Assert.AreEqual(12.50m, money);
+
+        Assert.IsFalse(FieldValueConverter.TryConvert("maybe", typeof(bool), out _, out var error));
+        Assert.AreEqual("'maybe' is not true or false.", error);
+    }
+
+    [TestMethod]
+    public void Choices_of_a_non_enum_is_refused()
+    {
+        Assert.ThrowsExactly<ArgumentException>(() => FieldValueConverter.ChoicesOf(typeof(int?)));
+    }
+
+    [TestMethod]
+    public void Booleans_and_times_format_for_the_change_summary()
+    {
+        Assert.AreEqual("true", FieldValueConverter.Format(true));
+        Assert.AreEqual("false", FieldValueConverter.Format(false));
+
+        var moment = new DateTime(2026, 10, 20, 10, 30, 0, DateTimeKind.Utc);
+        Assert.AreEqual(moment.ToString("O", System.Globalization.CultureInfo.InvariantCulture), FieldValueConverter.Format(moment));
+    }
+
+    [TestMethod]
+    public void Assignments_with_a_null_element_or_no_field_are_a_format_error()
+    {
+        Assert.ThrowsExactly<FormatException>(() => FieldAssignments.Parse("[null]"));
+        Assert.ThrowsExactly<FormatException>(() => FieldAssignments.Parse("[{}]"));
+        Assert.ThrowsExactly<FormatException>(() => FieldAssignments.Parse("[{\"field\":\" \"}]"));
     }
 }

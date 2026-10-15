@@ -13,9 +13,23 @@ namespace TaskRouter.Core.Fields;
 /// </summary>
 public static class FieldValueConverter
 {
+    /// <summary>ISO only, so no culture can change what a date means. The last covers the <c>{now}</c> token.</summary>
+    private static readonly string[] DateFormats =
+        ["yyyy-MM-dd", "yyyy-MM-ddTHH:mm", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm:ss.FFFFFFFK"];
+
+    /// <summary>
+    /// Converts <paramref name="text"/> to <paramref name="type"/>. Returns false with a
+    /// message the author can act on when the text does not fit.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The type is not one <see cref="InferKind"/> accepts. That is a mistake in the host's
+    /// declaration, so it fails the same way whatever the text.
+    /// </exception>
     public static bool TryConvert(string? text, Type type, out object? value, out string? error)
     {
         ArgumentNullException.ThrowIfNull(type);
+
+        InferKind(type);
 
         value = null;
         error = null;
@@ -24,7 +38,7 @@ public static class FieldValueConverter
         var target = underlying ?? type;
         var nullable = underlying is not null || !type.IsValueType;
 
-        if (text is null || (text.Length == 0 && target != typeof(string)))
+        if (text is null || (target != typeof(string) && string.IsNullOrWhiteSpace(text)))
         {
             if (nullable)
             {
@@ -43,12 +57,10 @@ public static class FieldValueConverter
 
         if (target.IsEnum)
         {
-            // Enum.TryParse accepts "4" as well as "Hold"; the digit check refuses the first.
-            if (!text.Any(char.IsDigit)
-                && Enum.TryParse(target, text, ignoreCase: false, out var parsed)
-                && Enum.IsDefined(target, parsed!))
+            // Enum.TryParse would accept numbers, flag lists and padding; only an exact member name is stable.
+            if (Enum.GetNames(target).Contains(text, StringComparer.Ordinal))
             {
-                value = parsed;
+                value = Enum.Parse(target, text);
                 return true;
             }
 
@@ -62,13 +74,14 @@ public static class FieldValueConverter
         {
             _ when target == typeof(bool) => (bool.TryParse(text, out var b), b, "true or false"),
             _ when target == typeof(DateTime) => (
-                DateTime.TryParse(text, invariant, DateTimeStyles.RoundtripKind, out var d), d, "a date"),
+                DateTime.TryParseExact(text, DateFormats, invariant, DateTimeStyles.AdjustToUniversal, out var d),
+                d, "a date (yyyy-MM-dd)"),
             _ when target == typeof(int) => (
                 int.TryParse(text, NumberStyles.Integer, invariant, out var i), i, "a whole number"),
             _ when target == typeof(long) => (
                 long.TryParse(text, NumberStyles.Integer, invariant, out var l), l, "a whole number"),
             _ when target == typeof(double) => (
-                double.TryParse(text, NumberStyles.Float, invariant, out var f), f, "a number"),
+                double.TryParse(text, NumberStyles.Float, invariant, out var f) && double.IsFinite(f), f, "a number"),
             _ when target == typeof(decimal) => (
                 decimal.TryParse(text, NumberStyles.Number, invariant, out var m), m, "a number"),
             _ => throw new NotSupportedException($"Fields of type {target.Name} are not supported.")
@@ -110,6 +123,12 @@ public static class FieldValueConverter
 
         var target = Nullable.GetUnderlyingType(enumType) ?? enumType;
 
+        if (!target.IsEnum)
+        {
+            throw new ArgumentException($"{target.Name} is not an enum.", nameof(enumType));
+        }
+
+        // GetFields returns enum members in declaration order: the runtime does so, though it does not document it.
         return [.. target.GetFields(BindingFlags.Public | BindingFlags.Static)
             .Select(f => new FieldChoice(
                 f.Name,
@@ -122,6 +141,7 @@ public static class FieldValueConverter
         null => null,
         DateTime d when d.TimeOfDay == TimeSpan.Zero => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         DateTime d => d.ToString("O", CultureInfo.InvariantCulture),
+        bool b => b ? "true" : "false",
         Enum e => e.ToString(),
         IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString()
