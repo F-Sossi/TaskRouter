@@ -55,13 +55,22 @@ internal sealed class FieldRegistration
     public required Type ValueType { get; init; }
     public required bool IsNullable { get; init; }
     public required IReadOnlyList<FieldChoice> Choices { get; init; }
+
+    /// <remarks>Callers must check <see cref="AppliesTo"/> first: extension fields are declared on a derived type under a base target.</remarks>
     public required Func<object, object?> Read { get; init; }
+
+    /// <remarks>Callers must check <see cref="AppliesTo"/> first: extension fields are declared on a derived type under a base target.</remarks>
     public required Func<object, object?, FieldWriteContext, CancellationToken, Task> Write { get; init; }
     public Func<FieldOptionsContext, CancellationToken, Task<IReadOnlyList<FieldChoice>>>? Options { get; init; }
+
+    internal bool AppliesTo(object entity) => DeclaringType.IsInstanceOfType(entity);
 
     public SubjectFieldInfo Describe() => new(Key, Label, Kind, IsNullable, Choices);
 }
 
 /// <summary>An <c>OnWritten</c> hook, which only runs on records of the type it was declared for.</summary>
 internal sealed record OnWrittenRegistration(
-    Type DeclaringType, Func<object, FieldWriteContext, CancellationToken, Task> Run);
+    Type DeclaringType, Func<object, FieldWriteContext, CancellationToken, Task> Run)
+{
+    internal bool AppliesTo(object entity) => DeclaringType.IsInstanceOfType(entity);
+}

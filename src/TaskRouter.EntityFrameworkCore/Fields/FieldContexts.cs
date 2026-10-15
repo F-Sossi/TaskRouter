@@ -22,9 +22,7 @@ public sealed class FieldResolveContext(
     /// every host wired by <c>AddTaskRouterFor</c>, but this cannot be got wrong.
     /// </summary>
     public TContext Db<TContext>() where TContext : class =>
-        Services.GetRequiredService<IWorkflowDbContext>() as TContext
-        ?? throw new InvalidOperationException(
-            $"IWorkflowDbContext is not a {typeof(TContext).Name}.");
+        DbResolver.Resolve<TContext>(Services);
 }
 
 /// <summary>What a field's writer and a target's <c>OnWritten</c> hook are given.</summary>
@@ -49,9 +47,7 @@ public sealed class FieldOptionsContext(string? search, IServiceProvider service
     public IServiceProvider Services { get; } = services;
 
     public TContext Db<TContext>() where TContext : class =>
-        Services.GetRequiredService<IWorkflowDbContext>() as TContext
-        ?? throw new InvalidOperationException(
-            $"IWorkflowDbContext is not a {typeof(TContext).Name}.");
+        DbResolver.Resolve<TContext>(Services);
 }
 
 /// <summary>
@@ -60,3 +56,11 @@ public sealed class FieldOptionsContext(string? search, IServiceProvider service
 /// </summary>
 public delegate Task FieldWriter<in TEntity, in TValue>(
     TEntity entity, TValue value, FieldWriteContext context, CancellationToken ct);
+
+internal static class DbResolver
+{
+    internal static TContext Resolve<TContext>(IServiceProvider services) where TContext : class =>
+        services.GetRequiredService<IWorkflowDbContext>() as TContext
+        ?? throw new InvalidOperationException(
+            $"IWorkflowDbContext is not a {typeof(TContext).Name}.");
+}

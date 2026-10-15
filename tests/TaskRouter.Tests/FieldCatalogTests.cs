@@ -150,6 +150,54 @@ public class FieldCatalogTests
     }
 
     [TestMethod]
+    public void An_extension_field_applies_only_to_its_own_type()
+    {
+        var fields = Base();
+        fields.ForSubjectType("ChangeRequest").Extend<ChangeRequest>("document").Field(c => c.Urgency, "Urgency");
+        Assert.IsTrue(fields.Build().TryGetTarget("ChangeRequest", "document", out var target));
+        var urgency = target.Fields.Single(f => f.Key == "Urgency");
+
+        Assert.IsTrue(urgency.AppliesTo(new ChangeRequest { Title = "t", DocNumber = "n", Originator = "o" }));
+        Assert.IsFalse(urgency.AppliesTo(new Drawing { Title = "t", DocNumber = "n" }));
+    }
+
+    [TestMethod]
+    public void A_null_for_a_non_nullable_field_is_refused()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("ChangeRequest")
+            .Target<WorkItem>("w", "W", FieldCardinality.One, NoWorkItems)
+            .Field(w => w.WorkItemState, "State");
+        Assert.IsTrue(fields.Build().TryGetTarget("ChangeRequest", "w", out var target));
+        var state = target.Fields.Single();
+        var item = new WorkItem { DocumentId = 1, AssignedSectionId = 1 };
+
+        var error = Assert.ThrowsExactly<InvalidOperationException>(
+            () => state.Write(item, null, null!, CancellationToken.None).GetAwaiter().GetResult());
+        StringAssert.Contains(error.Message, "'State' needs a value");
+    }
+
+    [TestMethod]
+    public void Options_on_a_field_that_is_not_a_lookup_are_refused()
+    {
+        var target = new WorkflowFieldsBuilder().ForSubjectType("ChangeRequest")
+            .Target<WorkItem>("w", "W", FieldCardinality.One, NoWorkItems);
+
+        Assert.ThrowsExactly<ArgumentException>(() => target.Field(
+            w => w.WorkItemState, "State", options: (_, _) => Task.FromResult<IReadOnlyList<FieldChoice>>([])));
+    }
+
+    [TestMethod]
+    public void A_repeated_subject_type_is_not_a_duplicate()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectTypes(["Drawing", "Drawing"])
+            .Target<DocumentBase>("document", "This document", FieldCardinality.One, NoDocuments);
+
+        Assert.HasCount(1, fields.Build().Describe("Drawing"));
+    }
+
+    [TestMethod]
     public void A_lookup_without_options_is_refused()
     {
         var target = new WorkflowFieldsBuilder().ForSubjectType("ChangeRequest")

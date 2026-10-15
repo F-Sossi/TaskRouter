@@ -23,7 +23,7 @@ public sealed class WorkflowFieldsBuilder
     public SubjectFieldsBuilder ForSubjectTypes(IEnumerable<string> subjectTypes)
     {
         ArgumentNullException.ThrowIfNull(subjectTypes);
-        return new(this, [.. subjectTypes]);
+        return new(this, [.. subjectTypes.Distinct(StringComparer.Ordinal)]);
     }
 
     public SubjectFieldsBuilder ForSubjectType(string subjectType) => ForSubjectTypes([subjectType]);
@@ -146,14 +146,15 @@ public sealed class SubjectFieldsBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
         ArgumentNullException.ThrowIfNull(resolve);
 
-        var take = cardinality == FieldCardinality.One ? 2 : int.MaxValue;
+        var limit = cardinality == FieldCardinality.One;
 
         var declaration = new TargetDeclaration(_subjectTypes, key, typeof(T), IsExtension: false)
         {
             Label = label,
             Cardinality = cardinality,
             Resolve = async (context, ct) =>
-                (await resolve(context).Take(take).ToListAsync(ct).ConfigureAwait(false)).Cast<object>().ToList()
+                (await (limit ? resolve(context).Take(2) : resolve(context)).ToListAsync(ct).ConfigureAwait(false))
+                    .Cast<object>().ToList()
         };
 
         _root.Add(declaration);
@@ -230,8 +231,13 @@ public sealed class TargetFieldsBuilder<T> where T : class
         if (kind is { } explicitKind && explicitKind is not (FieldKind.Actor or FieldKind.Lookup))
         {
             throw new ArgumentException(
-                $"Only Actor and Lookup are given explicitly; '{info.Name}' is inferred as {FieldValueConverter.InferKind(valueType)}.",
+                $"'{info.Name}': kind {explicitKind} cannot be given explicitly (only Actor and Lookup can); omit it and the property's type decides.",
                 nameof(kind));
+        }
+
+        if (options is not null && effective != FieldKind.Lookup)
+        {
+            throw new ArgumentException($"'{info.Name}' is not a lookup, so it takes no options.", nameof(options));
         }
 
         if (effective == FieldKind.Lookup && options is null)
@@ -245,6 +251,7 @@ public sealed class TargetFieldsBuilder<T> where T : class
         }
 
         var getter = property.Compile();
+        var isNullable = !valueType.IsValueType || Nullable.GetUnderlyingType(valueType) is not null;
 
         _declaration.Fields.Add(new FieldRegistration
         {
@@ -253,20 +260,37 @@ public sealed class TargetFieldsBuilder<T> where T : class
             Kind = effective,
             DeclaringType = typeof(T),
             ValueType = valueType,
-            IsNullable = !valueType.IsValueType || Nullable.GetUnderlyingType(valueType) is not null,
+            IsNullable = isNullable,
             Choices = effective == FieldKind.Choice ? FieldValueConverter.ChoicesOf(valueType) : [],
             Read = entity => getter((T)entity),
             Write = write is null
                 ? (entity, value, _, _) =>
                 {
+                    RequireValue(value, isNullable, label);
                     info.SetValue(entity, value);
                     return Task.CompletedTask;
                 }
-                : (entity, value, context, ct) => write((T)entity, (TValue)value!, context, ct),
+                : (entity, value, context, ct) =>
+                {
+                    RequireValue(value, isNullable, label);
+                    return write((T)entity, (TValue)value!, context, ct);
+                },
             Options = options
         });
 
         return this;
+    }
+
+    /// <summary>
+    /// Reflection would write default(T) for a null into a non-nullable value type, which
+    /// for a status is its zero member — refuse instead.
+    /// </summary>
+    private static void RequireValue(object? value, bool isNullable, string label)
+    {
+        if (value is null && !isNullable)
+        {
+            throw new InvalidOperationException($"'{label}' needs a value.");
+        }
     }
 
     /// <summary>
