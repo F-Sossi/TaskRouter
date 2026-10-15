@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
+using TaskRouter.Core.Fields;
 using TaskRouter.Core.Validation;
 
 namespace TaskRouter.Blazor.Http;
@@ -103,6 +104,18 @@ public sealed class HttpWorkflowBuilderClient(HttpClient http, string prefix = "
 
     public async Task<IReadOnlyList<string>> GetSubjectTypesAsync(CancellationToken ct = default) =>
         await GetAsync<List<string>>($"{_root}/subject-types", ct).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<SubjectTargetInfo>> GetSubjectFieldsAsync(
+        string subjectType, CancellationToken ct = default) =>
+        await GetAsync<List<SubjectTargetInfo>>(
+            $"{_root}/fields/{Uri.EscapeDataString(subjectType)}", ct).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<FieldChoice>> SearchFieldOptionsAsync(
+        string subjectType, string target, string field, string? search, CancellationToken ct = default) =>
+        await GetAsync<List<FieldChoice>>(
+            $"{_root}/fields/{Uri.EscapeDataString(subjectType)}/{Uri.EscapeDataString(target)}"
+            + $"/{Uri.EscapeDataString(field)}/options?q={Uri.EscapeDataString(search ?? string.Empty)}", ct)
+            .ConfigureAwait(false);
 
     public async Task<IReadOnlyList<string>> GetRouteConditionsAsync(CancellationToken ct = default) =>
         await GetAsync<List<string>>($"{_root}/route-conditions", ct).ConfigureAwait(false);
