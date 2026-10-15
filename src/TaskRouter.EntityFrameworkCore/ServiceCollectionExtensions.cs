@@ -10,6 +10,7 @@ using TaskRouter.Core.Inbox;
 using TaskRouter.Core.Model;
 using TaskRouter.Core.Runner;
 
+using TaskRouter.EntityFrameworkCore.Fields;
 using TaskRouter.EntityFrameworkCore.Triggers;
 
 namespace TaskRouter.EntityFrameworkCore;
@@ -23,6 +24,30 @@ public sealed class WorkflowEngineBuilder(IServiceCollection services)
     {
         Services.AddScoped<IWorkflowTrigger, T>();
         return this;
+    }
+
+    /// <summary>
+    /// Declares the fields workflow authors may set, and offers them the
+    /// <c>workflow.updateFields</c> trigger. Call once; declare every subject type here.
+    ///
+    /// <para>The catalog is built — and every wiring mistake in it reported — here, as the
+    /// application starts, not when the first task completes.</para>
+    /// </summary>
+    public WorkflowEngineBuilder AddWorkflowFields(Action<WorkflowFieldsBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        if (Services.Any(d => d.ServiceType == typeof(WorkflowFieldCatalog)))
+        {
+            throw new InvalidOperationException(
+                "AddWorkflowFields has already been called. Declare every subject type's fields in one call.");
+        }
+
+        var fields = new WorkflowFieldsBuilder();
+        configure(fields);
+
+        Services.AddSingleton(fields.Build());
+        return AddTrigger<UpdateFieldsTrigger>();
     }
 
     public WorkflowEngineBuilder AddAssignmentResolver<T>() where T : class, IWorkflowAssignmentResolver

@@ -19,6 +19,7 @@ public static class BuiltInTriggerKeys
     public const string ReportProgress = "workflow.reportProgress";
     public const string Notify = "workflow.notify";
     public const string Webhook = "workflow.webhook";
+    public const string UpdateFields = "workflow.updateFields";
 }
 
 /// <summary>Writes a workflow variable. The simplest useful trigger.</summary>

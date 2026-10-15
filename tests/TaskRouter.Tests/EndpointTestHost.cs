@@ -99,6 +99,8 @@ public sealed class EndpointTestHost : IAsyncDisposable
             // rejects a workflow whose trigger keys are not registered, so a fixture
             // missing this fails on the seeded workflow rather than on anything a test did.
             .AddTrigger<DemoEscalationTrigger>()
+            // Mirrors Program.cs, so the field-update trigger is in the registry.
+            .AddWorkflowFields(DemoWorkflowFields.Configure)
             // The builder endpoints are mapped by MapTaskRouterEndpoints whether or not a
             // host registers this, so the fixture registers it -- see
             // BuilderEndpointTests.A_host_that_never_adopted_the_builder_still_starts for
