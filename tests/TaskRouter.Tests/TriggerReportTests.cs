@@ -210,14 +210,84 @@ public class TriggerReportTests
         Assert.IsTrue(probe == Expected(before) || probe == Expected(after), probe);
     }
 
-    private void AddSetVariable(int definitionId, int order, string name, string value) =>
+    [TestMethod]
+    public async Task A_run_variable_set_on_one_step_is_read_by_the_next()
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        var entryVersionId = await _host.Db.WorkflowTaskDefinitions
+            .Where(d => d.Id == entryDefinitionId).Select(d => d.WorkflowDefinitionVersionId).SingleAsync();
+        var provideInputDefinitionId = await _host.Db.WorkflowTaskDefinitions
+            .Where(d => d.WorkflowDefinitionVersionId == entryVersionId && d.DisplayName == "Provide Input")
+            .Select(d => d.Id).SingleAsync();
+
+        AddSetVariable(entryDefinitionId, 0, "x", "from the entry step", scope: "run");
+        AddSetVariable(provideInputDefinitionId, 0, "y", "{var:x}");
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        var next = await _host.Db.WorkflowTasks.AsNoTracking()
+            .FirstAsync(t => t.WorkflowRunId == runId && t.TaskDefinitionId == provideInputDefinitionId);
+
+        (await _host.Engine.CompleteTaskAsync(next.Id, "approved", next.AssignedToActorId ?? "user-lead-c100")).Unwrap();
+
+        var x = await _host.Db.WorkflowVariables.AsNoTracking()
+            .SingleAsync(v => v.WorkflowRunId == runId && v.Name == "x");
+
+        Assert.IsNull(x.TaskId, "A run-scoped variable belongs to the run, not to the task that set it.");
+        Assert.AreEqual("from the entry step", await ReadVariableAsync(runId, "y"));
+    }
+
+    [TestMethod]
+    public async Task A_task_variable_stays_with_its_task()
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        AddSetVariable(entryDefinitionId, 0, "mine", "only here", scope: "task");
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        var row = await _host.Db.WorkflowVariables.AsNoTracking()
+            .SingleAsync(v => v.WorkflowRunId == runId && v.Name == "mine");
+
+        Assert.AreEqual(entryTaskId, row.TaskId);
+        Assert.AreEqual("only here", row.Value);
+    }
+
+    [TestMethod]
+    public async Task A_variable_with_no_scope_is_run_scoped()
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        AddSetVariable(entryDefinitionId, 0, "plain", "v");
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        var row = await _host.Db.WorkflowVariables.AsNoTracking()
+            .SingleAsync(v => v.WorkflowRunId == runId && v.Name == "plain");
+
+        Assert.IsNull(row.TaskId);
+    }
+
+    private void AddSetVariable(int definitionId, int order, string name, string value, string? scope = null) =>
         _host.Db.WorkflowTriggerDefinitions.Add(new TriggerDefinition
         {
             TaskDefinitionId = definitionId,
             TriggerKey = BuiltInTriggerKeys.SetVariable,
             Event = WorkflowEventKind.TaskCompleted,
             Order = order,
-            Configuration = System.Text.Json.JsonSerializer.Serialize(new { name, value }),
+            Configuration = scope is null
+                ? System.Text.Json.JsonSerializer.Serialize(new { name, value })
+                : System.Text.Json.JsonSerializer.Serialize(new { name, value, scope }),
             CreatorId = "system",
             ModifierId = "system"
         });

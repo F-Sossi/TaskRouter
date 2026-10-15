@@ -52,7 +52,14 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         var value = await TriggerTemplate.RenderAsync(context.Config.GetString("value"), context, ct)
             .ConfigureAwait(false);
 
-        await context.Variables.SetAsync(name, value, VariableType.String, ct).ConfigureAwait(false);
+        // context.Variables is the task's view: it writes against the task. "run" (the
+        // default) writes against the run, so a later step and the route conditions see it.
+        var scope = context.Config.GetString("scope");
+        var variables = string.Equals(scope, "task", StringComparison.OrdinalIgnoreCase)
+            ? context.Variables
+            : (context.Variables as WorkflowVariables)?.ForRun() ?? context.Variables;
+
+        await variables.SetAsync(name, value, VariableType.String, ct).ConfigureAwait(false);
     }
 }
 

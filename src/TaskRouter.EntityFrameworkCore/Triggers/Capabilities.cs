@@ -10,6 +10,13 @@ public sealed class WorkflowVariables(IWorkflowDbContext db, int runId, int? tas
     : IWorkflowVariables
 {
     /// <summary>
+    /// The same run's variables at run scope: what this instance writes is task-scoped when
+    /// it was given a task, and a later step's task-scoped view only sees its own task's
+    /// values and the run's.
+    /// </summary>
+    internal WorkflowVariables ForRun() => taskId is null ? this : new(db, runId);
+
+    /// <summary>
     /// Variables the context is tracking, as they stand now. Inline triggers do not save
     /// between one another, so a value set by an earlier trigger on the same event is only
     /// here, not in the database (Local never includes deleted entries) — and a tracked change to a stored value is newer than the row.
