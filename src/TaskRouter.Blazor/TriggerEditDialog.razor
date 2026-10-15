@@ -60,7 +60,8 @@
             <TriggerConfigForm Descriptor="Selected"
                                Configuration="_edit.Configuration"
                                TaskOptions="TaskOptions"
-                               RoleOptions="RoleOptions" />
+                               RoleOptions="RoleOptions"
+                               SubjectType="SubjectType" />
 
             <MudDivider />
 
@@ -140,6 +141,15 @@
         = new Dictionary<string, string>();
     [Parameter] public IReadOnlyList<string> RoleOptions { get; set; } = [];
 
+    /// <summary>The workflow's subject type, which a field-update trigger's fields depend on.</summary>
+    [Parameter] public string? SubjectType { get; set; }
+
+    /// <summary>
+    /// Whether this trigger has never been saved. Only a new trigger takes the chosen action's
+    /// dispatch and failure defaults; an existing one keeps what its author chose.
+    /// </summary>
+    [Parameter] public bool IsNew { get; set; }
+
     /// <summary>
     /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
     /// passes reference types by reference, so binding straight to the parameter wrote
@@ -168,34 +178,14 @@
             return;
         }
 
-        _edit.TriggerKey = key;
-
-        var descriptor = Selected;
-        if (descriptor is not null)
+        var descriptor = Descriptors.FirstOrDefault(d => d.Key == key);
+        if (descriptor is null)
         {
-            // Adopt the trigger's own defaults, and drop configuration belonging to
-            // whatever was selected before.
-            _edit.DispatchMode = descriptor.DefaultDispatch;
-            _edit.FailurePolicy = descriptor.DefaultFailurePolicy;
-
-            var valid = descriptor.Parameters.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var stale in _edit.Configuration.Keys.Where(k => !valid.Contains(k)).ToList())
-            {
-                _edit.Configuration.Remove(stale);
-            }
-
-            foreach (var p in descriptor.Parameters.Where(p => p.DefaultValue is not null))
-            {
-                if (!_edit.Configuration.ContainsKey(p.Name))
-                {
-                    _edit.Configuration[p.Name] = p.DefaultValue;
-                }
-            }
-
-            if (!descriptor.SupportedEvents.Contains(_edit.Event) && descriptor.SupportedEvents.Count > 0)
-            {
-                _edit.Event = descriptor.SupportedEvents[0];
-            }
+            _edit.TriggerKey = key;
+        }
+        else
+        {
+            TriggerSelection.Apply(_edit, descriptor, IsNew);
         }
 
         StateHasChanged();

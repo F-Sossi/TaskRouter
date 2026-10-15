@@ -119,6 +119,16 @@ else
                     </MudSelect>
                     break;
 
+                case TriggerParameterKind.FieldTarget:
+                    @* One editor owns both the target and the assignments parameters. *@
+                    <SubjectFieldsEditor SubjectType="@SubjectType"
+                                         Configuration="Configuration"
+                                         ConfigurationChanged="ConfigurationChanged" />
+                    break;
+
+                case TriggerParameterKind.FieldAssignments:
+                    break;
+
                 default:
                     <MudTextField T="string"
                                   Value="@Get(p)"
@@ -147,6 +157,9 @@ else
         = new Dictionary<string, string>();
 
     [Parameter] public IReadOnlyList<string> RoleOptions { get; set; } = [];
+
+    /// <summary>The workflow's subject type — what a field-update trigger's fields depend on.</summary>
+    [Parameter] public string? SubjectType { get; set; }
 
     private static string Label(TriggerParameter p) => p.Required ? $"{p.Label} *" : p.Label;
 

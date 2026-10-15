@@ -564,7 +564,9 @@ else
             { x => x.Model, trigger },
             { x => x.Descriptors, _descriptors },
             { x => x.TaskOptions, TaskOptions },
-            { x => x.RoleOptions, _roles }
+            { x => x.RoleOptions, _roles },
+            { x => x.SubjectType, _model?.SubjectType },
+            { x => x.IsNew, isNew }
         };
 
         var dialog = await Dialogs.ShowAsync<TriggerEditDialog>(
