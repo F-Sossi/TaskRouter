@@ -111,6 +111,27 @@ public class TriggerReportTests
     }
 
     [TestMethod]
+    public async Task Two_triggers_setting_the_same_variable_on_one_event_leave_one_row()
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        AddSetVariable(entryDefinitionId, 0, "dup", "a");
+        AddSetVariable(entryDefinitionId, 1, "dup", "b");
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        var rows = await _host.Db.WorkflowVariables.AsNoTracking()
+            .Where(v => v.WorkflowRunId == runId && v.Name == "dup")
+            .ToListAsync();
+
+        Assert.HasCount(1, rows);
+        Assert.AreEqual("b", rows[0].Value);
+    }
+
+    [TestMethod]
     public async Task A_later_trigger_sees_a_variable_an_earlier_one_set_on_the_same_event()
     {
         var (runId, entryTaskId, entryDefinitionId) = await StartAsync();

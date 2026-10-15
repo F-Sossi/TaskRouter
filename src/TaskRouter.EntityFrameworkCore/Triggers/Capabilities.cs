@@ -53,10 +53,14 @@ public sealed class WorkflowVariables(IWorkflowDbContext db, int runId, int? tas
         VariableType type = VariableType.String,
         CancellationToken ct = default)
     {
-        var existing = await db.WorkflowVariables
-            .SingleOrDefaultAsync(
-                v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name == name, ct)
-            .ConfigureAwait(false);
+        // Tracked first: a variable an earlier trigger on this event added has not been saved,
+        // so the database cannot see it, and adding again would violate the unique index.
+        var existing = db.WorkflowVariables.Local.FirstOrDefault(
+                v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name == name)
+            ?? await db.WorkflowVariables
+                .SingleOrDefaultAsync(
+                    v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name == name, ct)
+                .ConfigureAwait(false);
 
         if (existing is null)
         {
