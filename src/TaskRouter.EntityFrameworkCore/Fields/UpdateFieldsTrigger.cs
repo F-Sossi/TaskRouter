@@ -68,7 +68,7 @@ public sealed class UpdateFieldsTrigger(
         if (!catalog.TryGetTarget(subjectType, targetKey, out var target))
         {
             throw new InvalidOperationException(
-                $"This step updates '{targetKey}', which {subjectType} documents do not have.");
+                $"This step updates '{targetKey}', which {subjectType} does not have.");
         }
 
         var assignments = FieldAssignments.Parse(context.Config.GetString("assignments"));

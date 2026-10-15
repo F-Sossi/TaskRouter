@@ -277,7 +277,7 @@ public class UpdateFieldsTriggerEndToEndTests
 
         Assert.IsTrue(result.IsError);
         StringAssert.Contains(result.UnwrapError().Message,
-            "This step updates 'nope', which ChangeRequest documents do not have.");
+            "This step updates 'nope', which ChangeRequest does not have.");
     }
 
     [TestMethod]

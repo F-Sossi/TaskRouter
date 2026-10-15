@@ -4,8 +4,10 @@ using Microsoft.EntityFrameworkCore;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
+using TaskRouter.Core.Fields;
 using TaskRouter.Core.Model;
 using TaskRouter.Core.Validation;
+using TaskRouter.EntityFrameworkCore.Fields;
 using TaskRouter.EntityFrameworkCore.Runner;
 using TaskRouter.EntityFrameworkCore.Triggers;
 
@@ -37,7 +39,9 @@ public sealed class EfWorkflowBuilderClient(
     IWorkflowTriggerRegistry triggers,
     IEnumerable<IRouteConditionEvaluator> conditions,
     WorkflowBuilderOptions options,
-    IWorkflowEditorActorAccessor actors) : IWorkflowBuilderClient
+    IWorkflowEditorActorAccessor actors,
+    WorkflowFieldCatalog? fields = null,
+    IServiceProvider? services = null) : IWorkflowBuilderClient
 {
     /// <summary>
     /// Who is editing. Every row this class writes is attributed to them, so a host without
@@ -140,6 +144,53 @@ public sealed class EfWorkflowBuilderClient(
 
     public Task<IReadOnlyList<string>> GetSubjectTypesAsync(CancellationToken ct = default) =>
         Task.FromResult(options.SubjectTypes);
+
+    public Task<IReadOnlyList<SubjectTargetInfo>> GetSubjectFieldsAsync(
+        string subjectType, CancellationToken ct = default) =>
+        Task.FromResult(fields?.Describe(subjectType) ?? []);
+
+    /// <summary>
+    /// A lookup asks the host's options delegate. An actor field with no delegate of its
+    /// own asks the directory — the same one the reassign picker uses — so a host gets
+    /// actor pickers without writing anything.
+    /// </summary>
+    public async Task<IReadOnlyList<FieldChoice>> SearchFieldOptionsAsync(
+        string subjectType, string target, string field, string? search, CancellationToken ct = default)
+    {
+        if (fields is null || services is null
+            || !fields.TryGetTarget(subjectType, target, out var registration))
+        {
+            return [];
+        }
+
+        var match = registration.Fields.FirstOrDefault(f => f.Key == field);
+
+        if (match?.Options is { } optionsOf)
+        {
+            return await optionsOf(new FieldOptionsContext(search, services), ct).ConfigureAwait(false);
+        }
+
+        if (match?.Kind != FieldKind.Actor)
+        {
+            return [];
+        }
+
+        var directory = services.GetService(typeof(IWorkflowActorResolver)) as IWorkflowActorResolver;
+
+        if (directory is null)
+        {
+            return [];
+        }
+
+        var people = await directory.GetActorsAsync(ct).ConfigureAwait(false);
+
+        return [.. people
+            .Where(a => string.IsNullOrWhiteSpace(search)
+                || a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || a.ActorId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Take(20)
+            .Select(a => new FieldChoice(a.ActorId, a.DisplayName))];
+    }
 
     public async Task<IReadOnlyList<OutcomeTypeOption>> GetOutcomeTypesAsync(
         CancellationToken ct = default)
@@ -320,8 +371,99 @@ public sealed class EfWorkflowBuilderClient(
         var errors = new List<ValidationError>();
         errors.AddRange(StructuralErrors(model));
         errors.AddRange(WorkflowDefinitionValidator.Validate(ToTransientVersion(model)));
+        errors.AddRange(FieldErrors(model));
 
         return Task.FromResult<IReadOnlyList<ValidationError>>(errors);
+    }
+
+    /// <summary>
+    /// A field update the host could never run: a target or field this subject type does
+    /// not have, a value that cannot become the field's type, or a token where only a fixed
+    /// value makes sense. Not structural — a draft may be saved half-configured — so these
+    /// block publishing, not saving.
+    ///
+    /// <para>Lookup values are not checked: whether key 12 exists is a question about data,
+    /// and is answered when the trigger runs.</para>
+    /// </summary>
+    private List<ValidationError> FieldErrors(WorkflowEditModel model)
+    {
+        var errors = new List<ValidationError>();
+
+        foreach (var task in model.Tasks)
+        {
+            foreach (var trigger in task.Triggers.Where(t =>
+                string.Equals(t.TriggerKey, BuiltInTriggerKeys.UpdateFields, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (fields is null)
+                {
+                    errors.Add(new("FIELDS_NOT_CONFIGURED", $"'{task.Label}' updates fields, but this host declares none."));
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(model.SubjectType))
+                {
+                    errors.Add(new("FIELDS_NO_SUBJECT",
+                        $"'{task.Label}' updates fields, so the workflow needs a subject type."));
+                    continue;
+                }
+
+                var targetKey = trigger.Configuration.GetValueOrDefault("target");
+
+                if (targetKey is null || !fields.TryGetTarget(model.SubjectType, targetKey, out var target))
+                {
+                    errors.Add(new("FIELDS_UNKNOWN_TARGET",
+                        $"'{task.Label}': {model.SubjectType} has no '{targetKey}' to update."));
+                    continue;
+                }
+
+                IReadOnlyList<FieldAssignment> assignments;
+
+                try
+                {
+                    assignments = FieldAssignments.Parse(trigger.Configuration.GetValueOrDefault("assignments"));
+                }
+                catch (FormatException ex)
+                {
+                    errors.Add(new("FIELDS_BAD_CONFIG", $"'{task.Label}': {ex.Message}"));
+                    continue;
+                }
+
+                foreach (var assignment in assignments)
+                {
+                    var field = target.Fields.FirstOrDefault(f => f.Key == assignment.Field);
+
+                    if (field is null)
+                    {
+                        errors.Add(new("FIELDS_UNKNOWN_FIELD",
+                            $"'{task.Label}': {model.SubjectType} has no field '{assignment.Field}' on '{target.Label}'."));
+                        continue;
+                    }
+
+                    if (assignment.Value?.Contains('{', StringComparison.Ordinal) == true)
+                    {
+                        if (field.Kind is FieldKind.Choice or FieldKind.Boolean or FieldKind.Lookup)
+                        {
+                            errors.Add(new("FIELDS_TOKEN_NOT_ALLOWED",
+                                $"'{task.Label}': {field.Label} takes a fixed value, not '{assignment.Value}'."));
+                        }
+
+                        continue;   // a token's value is only known when the trigger runs
+                    }
+
+                    if (field.Kind is FieldKind.Lookup)
+                    {
+                        continue;
+                    }
+
+                    if (!FieldValueConverter.TryConvert(assignment.Value, field.ValueType, out _, out var error))
+                    {
+                        errors.Add(new("FIELDS_BAD_VALUE", $"'{task.Label}': {field.Label}: {error}"));
+                    }
+                }
+            }
+        }
+
+        return errors;
     }
 
     /// <summary>
