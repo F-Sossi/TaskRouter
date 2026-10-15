@@ -103,4 +103,17 @@ public sealed class WorkflowTriggerContext
 
     /// <summary>Host-side resolution for triggers that need domain services.</summary>
     public IServiceProvider? Services { get; init; }
+
+    /// <summary>
+    /// What this execution should record about itself. A fresh one per trigger execution;
+    /// the dispatcher copies <see cref="TriggerExecutionReport.Detail"/> onto the
+    /// execution row whether the trigger succeeds or throws.
+    /// </summary>
+    public TriggerExecutionReport Report { get; } = new();
+}
+
+/// <summary>What a trigger wants recorded about what it did.</summary>
+public sealed class TriggerExecutionReport
+{
+    public string? Detail { get; set; }
 }

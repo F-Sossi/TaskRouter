@@ -57,6 +57,15 @@ public enum WorkflowOperation
     /// <para>Appended, not inserted. These values are persisted by hosts.</para>
     /// </summary>
     PreAssignTask,
+
+    /// <summary>
+    /// A field-update trigger writing to the run's subject or a record related to it.
+    /// Checked as the person whose action raised the event, like every other trigger
+    /// action; the deadline sweep runs as <see cref="Model.WorkflowActors.System"/> and is
+    /// not checked. <see cref="WorkflowAuthorizationContext.FieldTarget"/> and
+    /// <see cref="WorkflowAuthorizationContext.Fields"/> say what is being written.
+    /// </summary>
+    UpdateSubjectFields,
 }
 
 /// <summary>
@@ -72,7 +81,14 @@ public sealed record WorkflowAuthorizationContext(
     string ActorId,
     WorkflowTaskSnapshot? Task,
     WorkflowSubject? Subject,
-    int? WorkflowDefinitionId);
+    int? WorkflowDefinitionId)
+{
+    /// <summary>For <see cref="WorkflowOperation.UpdateSubjectFields"/>: the target's key.</summary>
+    public string? FieldTarget { get; init; }
+
+    /// <summary>For <see cref="WorkflowOperation.UpdateSubjectFields"/>: the field keys being set.</summary>
+    public IReadOnlyList<string> Fields { get; init; } = [];
+}
 
 /// <summary>
 /// Allowed, or denied with a reason.
