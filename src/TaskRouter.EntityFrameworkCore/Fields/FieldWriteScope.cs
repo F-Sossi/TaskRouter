@@ -111,10 +111,14 @@ internal sealed class FieldWriteScope : IAsyncDisposable
     /// the tracked entities to their stored state. Returns normally when the undo succeeds,
     /// so the caller can rethrow <paramref name="cause"/> itself.
     ///
-    /// <para>If the undo itself fails, the scope's writes may be half-reverted, and letting
-    /// the workflow carry on would commit them. So the whole transaction is rolled back,
-    /// which makes the caller's final save and commit fail even under LogAndContinue, and a
-    /// <see cref="FieldUpdateUndoFailedException"/> carrying both errors is thrown.</para>
+    /// <para>If the undo itself fails, the scope's writes may be half-reverted. So the whole
+    /// transaction is rolled back and a <see cref="FieldUpdateUndoFailedException"/> carrying
+    /// both errors is thrown. What prevents a partial commit is that exception propagating:
+    /// the trigger dispatcher always rethrows it, whatever the failure policy, so the
+    /// operation is abandoned. The rollback is server-side, so a caller that caught the
+    /// exception and carried on writing would run those writes in autocommit mode and they
+    /// would land. That the engine's final save then happens to fail (on EF's automatic
+    /// savepoint, SQL error 628) is incidental, not the mechanism.</para>
     ///
     /// <para>Consequences of that composite worth knowing: it is not a DbUpdateException, so
     /// the execution strategy will not retry a deadlock (1205) that hit the host's write; an
@@ -146,10 +150,11 @@ internal sealed class FieldWriteScope : IAsyncDisposable
                 {
                     // Rolls back the DbTransaction underneath EF rather than through
                     // IDbContextTransaction: EF's own rollback would also clear
-                    // Database.CurrentTransaction, and the caller's final SaveChanges would
-                    // then run in a fresh transaction of its own and commit whatever the
-                    // tracker still holds. Left in place, the dead transaction makes that
-                    // save and the commit fail instead.
+                    // Database.CurrentTransaction, and a later SaveChanges would quietly open
+                    // a fresh transaction and commit whatever the tracker still holds. This
+                    // way EF still believes a transaction is open; nothing here blocks later
+                    // statements, though. The exception thrown below is what stops the
+                    // operation.
                     await _transaction.GetDbTransaction().RollbackAsync().ConfigureAwait(false);
                 }
 #pragma warning disable CA1031 // Best effort: the undo error is what gets reported.
@@ -157,7 +162,7 @@ internal sealed class FieldWriteScope : IAsyncDisposable
                 {
                     // The rollback itself failed. Closing the connection makes the server
                     // roll back whatever transaction it still holds, so the message below
-                    // stays true; the caller's next save then fails on the closed transaction.
+                    // stays true.
                     try
                     {
                         await _db.Database.GetDbConnection().CloseAsync().ConfigureAwait(false);
@@ -216,37 +221,49 @@ internal sealed class FieldWriteScope : IAsyncDisposable
             await _transaction.RollbackToSavepointAsync(_savepoint).ConfigureAwait(false);
         }
 
-        // New entities first: detaching is in memory and cannot fail.
-        foreach (var (entity, wasNew) in _touched)
-        {
-            if (wasNew)
-            {
-                DetachNew(_db.Entry(entity));
-            }
-        }
-
         List<Exception>? errors = null;
 
-        foreach (var (entity, wasNew) in _touched)
+        // Changes were detected once above. Entry() and Entries() would otherwise detect
+        // again mid-revert, and could rediscover a half-detached new entity through a
+        // navigation not yet cleaned up.
+        var autoDetect = _db.ChangeTracker.AutoDetectChangesEnabled;
+        _db.ChangeTracker.AutoDetectChangesEnabled = false;
+        try
         {
-            if (wasNew)
+            // New entities first: detaching is in memory and cannot fail.
+            foreach (var (entity, wasNew) in _touched)
             {
-                continue;
+                if (wasNew)
+                {
+                    DetachNew(_db.Entry(entity));
+                }
             }
 
-            var entry = _db.Entry(entity);
+            foreach (var (entity, wasNew) in _touched)
+            {
+                if (wasNew)
+                {
+                    continue;
+                }
 
-            try
-            {
-                await RevertExistingAsync(entry).ConfigureAwait(false);
+                var entry = _db.Entry(entity);
+
+                try
+                {
+                    await RevertExistingAsync(entry).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // Fail safe: an entity we could not reload must not stay tracked with the
+                    // scope's values, or the engine's next save would write them.
+                    entry.State = EntityState.Detached;
+                    (errors ??= []).Add(ex);
+                }
             }
-            catch (Exception ex)
-            {
-                // Fail safe: an entity we could not reload must not stay tracked with the
-                // scope's values, or the engine's next save would write them.
-                entry.State = EntityState.Detached;
-                (errors ??= []).Add(ex);
-            }
+        }
+        finally
+        {
+            _db.ChangeTracker.AutoDetectChangesEnabled = autoDetect;
         }
 
         if (errors is not null)
@@ -302,8 +319,21 @@ internal sealed class FieldWriteScope : IAsyncDisposable
                 continue;
             }
 
+            var foreignKeyValues = foreignKey.Properties
+                .Select(p => entry.Property(p.Name).CurrentValue)
+                .ToArray();
+
+            if (foreignKeyValues.Any(v => v is null))
+            {
+                continue;
+            }
+
+            // Only the principal this entity actually belongs to: its key matches our FK.
             var principals = entry.Context.ChangeTracker.Entries()
-                .Where(e => foreignKey.PrincipalEntityType.IsAssignableFrom(e.Metadata))
+                .Where(e => foreignKey.PrincipalEntityType.IsAssignableFrom(e.Metadata)
+                    && foreignKey.PrincipalKey.Properties
+                        .Select(p => e.Property(p.Name).CurrentValue)
+                        .SequenceEqual(foreignKeyValues))
                 .ToList();
 
             foreach (var principal in principals)

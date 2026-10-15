@@ -294,8 +294,10 @@ public class UpdateFieldsTriggerTests
         await using var db = NonPooledDb();
         var document = await NewChangeRequestAsync(db);
 
-        // The caller's final save is what fails: EF tries to take its automatic savepoint in
-        // a transaction the server no longer has.
+        // This caller deliberately carries on past the undo failure, which real callers must
+        // not do. Its write is kept out here only incidentally: the final save fails because
+        // EF tries to take its automatic savepoint in a transaction the server no longer has
+        // (error 628). The real guard is the exception propagating; see the dispatcher test.
         var final = await Assert.ThrowsExactlyAsync<SqlException>(() => WorkflowTransaction.ExecuteAsync(db, async ct =>
         {
             document.Description = "engine wrote this";
@@ -326,7 +328,7 @@ public class UpdateFieldsTriggerTests
 
             Assert.IsNotNull(failure);
 
-            // As under LogAndContinue: the workflow carries on and writes more. None of it may land.
+            // Carrying on regardless and writing more.
             document.Revision = "Z";
         }));
 
@@ -459,10 +461,10 @@ public class UpdateFieldsTriggerTests
                 sql => sql.EnableRetryOnFailure())
             .Options;
         await using var db = new OneSidedDbContext(options);
-        await db.Database.EnsureCreatedAsync();
-
         try
         {
+            await db.Database.EnsureCreatedAsync();
+
             var basket = new Basket();
             db.Baskets.Add(basket);
             await db.SaveChangesAsync();
