@@ -73,7 +73,7 @@ public class FieldValueConverterTests
         Assert.AreEqual(new DateTime(2026, 10, 20), date);
 
         Assert.IsTrue(FieldValueConverter.TryConvert("true", typeof(bool), out var flag, out _));
-        Assert.AreEqual(true, flag);
+        Assert.IsTrue((bool)flag!);
 
         Assert.IsTrue(FieldValueConverter.TryConvert("2.5", typeof(double), out var hours, out _));
         Assert.AreEqual(2.5, hours);
