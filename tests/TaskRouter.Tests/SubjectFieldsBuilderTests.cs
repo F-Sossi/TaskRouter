@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 using DemoDocuments.Server.Workflow;
 
+using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
 using TaskRouter.Core.Fields;
 using TaskRouter.EntityFrameworkCore;
@@ -138,29 +139,199 @@ public class SubjectFieldsBuilderTests
         Assert.IsNotEmpty(options, "The service provider should reach the DI-registered client.");
     }
 
-    private async Task<IReadOnlyList<Core.Validation.ValidationError>> ValidateWithAsync(
-        string? subjectType, string target, IReadOnlyList<FieldAssignment> assignments)
+    private Task<IReadOnlyList<Core.Validation.ValidationError>> ValidateWithAsync(
+        string? subjectType, string target, IReadOnlyList<FieldAssignment> assignments) =>
+        ValidateConfigAsync(_client, subjectType, new()
+        {
+            ["target"] = target,
+            ["assignments"] = FieldAssignments.Serialize(assignments)
+        });
+
+    private async Task<IReadOnlyList<Core.Validation.ValidationError>> ValidateConfigAsync(
+        IWorkflowBuilderClient client, string? subjectType, Dictionary<string, string?> configuration)
     {
         var versionId = await _host.Db.WorkflowDefinitionVersions
             .Where(v => v.WorkflowDefinition!.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName && v.IsPublished)
             .Select(v => v.Id)
             .FirstAsync();
 
-        var model = (await _client.GetWorkflowAsync(versionId))!;
+        var model = (await client.GetWorkflowAsync(versionId))!;
         model.SubjectType = subjectType;
 
         model.Tasks[0].Triggers.Add(new TriggerEditModel
         {
             TriggerKey = BuiltInTriggerKeys.UpdateFields,
-            Configuration = new()
-            {
-                ["target"] = target,
-                ["assignments"] = FieldAssignments.Serialize(assignments)
-            }
+            Configuration = configuration
         });
 
-        return await _client.ValidateAsync(model);
+        return await client.ValidateAsync(model);
     }
+
+    private sealed class Probe
+    {
+        public bool Flag { get; set; }
+        public int? OwnerId { get; set; }
+        public string? Name { get; set; }
+    }
+
+    /// <summary>A client over a catalog of its own, for the cases the demo's fields cannot express.</summary>
+    private EfWorkflowBuilderClient ClientWith(
+        Func<FieldOptionsContext, CancellationToken, Task<IReadOnlyList<FieldChoice>>> owners, bool withCatalog = true)
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("Probe")
+            .Target<Probe>("probe", "The probe", FieldCardinality.One, _ => Enumerable.Empty<Probe>().AsQueryable())
+                .Field(p => p.Flag, "Flag")
+                .Field(p => p.OwnerId, "Owner", FieldKind.Lookup, options: owners)
+                .Field(p => p.Name, "Name");
+
+        var services = _scope.ServiceProvider;
+
+        return new EfWorkflowBuilderClient(
+            services.GetRequiredService<IWorkflowDbContext>(),
+            services.GetRequiredService<IWorkflowTriggerRegistry>(),
+            [new RequiresReviewCondition()],
+            new WorkflowBuilderOptions(),
+            new TestEditorActorAccessor(),
+            withCatalog ? fields.Build() : null,
+            services);
+    }
+
+    private static Task<IReadOnlyList<FieldChoice>> NoOwners(FieldOptionsContext c, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<FieldChoice>>([]);
+
+    private static Dictionary<string, string?> Config(string? target, string? assignments) =>
+        new() { ["target"] = target, ["assignments"] = assignments };
+
+    [TestMethod]
+    public async Task A_host_with_no_catalog_refuses_a_field_update()
+    {
+        var errors = await ValidateConfigAsync(ClientWith(NoOwners, withCatalog: false), "Probe",
+            Config("probe", FieldAssignments.Serialize([new("Name", "x")])));
+
+        Assert.IsTrue(errors.Any(e => e.Code == "FIELDS_NOT_CONFIGURED"), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task Assignments_that_are_not_json_are_refused()
+    {
+        var errors = await ValidateWithAsync2("{not json");
+
+        Assert.IsTrue(errors.Any(e => e.Code == "FIELDS_BAD_CONFIG"), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task A_blank_target_is_refused_as_missing_not_unknown()
+    {
+        var errors = await ValidateConfigAsync(_client, "ChangeRequest",
+            Config("  ", FieldAssignments.Serialize([new("Status", "OnHold")])));
+
+        Assert.IsTrue(errors.Any(e => e.Code == "FIELDS_NO_TARGET"), Codes(errors));
+        Assert.IsFalse(errors.Any(e => e.Code == "FIELDS_UNKNOWN_TARGET"), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task A_field_update_that_sets_nothing_is_refused()
+    {
+        var errors = await ValidateWithAsync2("[]");
+
+        Assert.IsTrue(errors.Any(e => e.Code == "FIELDS_NO_FIELDS"), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task A_token_in_a_boolean_is_refused()
+    {
+        var errors = await ValidateWithAsync2(FieldAssignments.Serialize([new("Flag", "{var:x}")]));
+
+        Assert.IsTrue(errors.Any(e => e.Code == "FIELDS_TOKEN_NOT_ALLOWED"), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task A_lookup_literal_is_not_checked_here()
+    {
+        var errors = await ValidateWithAsync2(FieldAssignments.Serialize([new("OwnerId", "12")]));
+
+        Assert.IsFalse(errors.Any(e => e.Code.StartsWith("FIELDS_", StringComparison.Ordinal)), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task Configuration_keys_are_read_case_insensitively()
+    {
+        var errors = await ValidateConfigAsync(_client, "ChangeRequest", new()
+        {
+            ["Target"] = "document",
+            ["Assignments"] = FieldAssignments.Serialize([new("Status", "OnHold")])
+        });
+
+        Assert.IsFalse(errors.Any(e => e.Code.StartsWith("FIELDS_", StringComparison.Ordinal)), Codes(errors));
+    }
+
+    [TestMethod]
+    public async Task A_field_error_names_the_task()
+    {
+        var errors = await ValidateWithAsync("ChangeRequest", "theDocument", [new("Status", "OnHold")]);
+        var error = errors.Single(e => e.Code == "FIELDS_UNKNOWN_TARGET");
+
+        var versionId = await _host.Db.WorkflowDefinitionVersions
+            .Where(v => v.WorkflowDefinition!.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName && v.IsPublished)
+            .Select(v => v.Id)
+            .FirstAsync();
+        var label = (await _client.GetWorkflowAsync(versionId))!.Tasks[0].Label;
+
+        StringAssert.Contains(error.Message, $"'{label}'");
+    }
+
+    [TestMethod]
+    public async Task A_lookup_uses_its_options_delegate_and_is_capped_at_twenty()
+    {
+        string? seen = null;
+        var client = ClientWith((c, ct) =>
+        {
+            seen = c.Search;
+            return Task.FromResult<IReadOnlyList<FieldChoice>>(
+                [.. Enumerable.Range(1, 50).Select(i => new FieldChoice(i.ToString(), $"Owner {i}"))]);
+        });
+
+        var options = await client.SearchFieldOptionsAsync("Probe", "probe", "OwnerId", "  own ");
+
+        Assert.HasCount(20, options);
+        Assert.AreEqual("own", seen, "The search is trimmed before the host sees it.");
+    }
+
+    [TestMethod]
+    public async Task A_whitespace_search_reaches_the_delegate_as_null()
+    {
+        var seen = "unset";
+        var client = ClientWith((c, ct) => { seen = c.Search; return NoOwners(c, ct); });
+
+        await client.SearchFieldOptionsAsync("Probe", "probe", "OwnerId", "   ");
+
+        Assert.IsNull(seen);
+    }
+
+    [TestMethod]
+    public async Task A_throwing_options_delegate_offers_nothing_rather_than_failing()
+    {
+        var client = ClientWith((c, ct) => throw new InvalidOperationException("the lookup table is down"));
+
+        var options = await client.SearchFieldOptionsAsync("Probe", "probe", "OwnerId", null);
+
+        Assert.IsEmpty(options);
+    }
+
+    [TestMethod]
+    public async Task An_actor_search_narrows_to_matching_people()
+    {
+        var all = await _client.SearchFieldOptionsAsync("ChangeRequest", "document", "CogCoordinatorActorId", null);
+        var narrowed = await _client.SearchFieldOptionsAsync("ChangeRequest", "document", "CogCoordinatorActorId", "Casey");
+
+        Assert.IsGreaterThan(1, all.Count);
+        Assert.HasCount(1, narrowed);
+        StringAssert.Contains(narrowed[0].Label, "Casey");
+    }
+
+    private Task<IReadOnlyList<Core.Validation.ValidationError>> ValidateWithAsync2(string assignmentsJson) =>
+        ValidateConfigAsync(ClientWith(NoOwners), "Probe", Config("probe", assignmentsJson));
 
     private static string Codes(IEnumerable<Core.Validation.ValidationError> errors) =>
         "Got: " + string.Join("; ", errors.Select(e => $"{e.Code} {e.Message}"));

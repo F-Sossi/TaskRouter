@@ -1,6 +1,7 @@
 using System.Text.Json;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
@@ -41,8 +42,12 @@ public sealed class EfWorkflowBuilderClient(
     WorkflowBuilderOptions options,
     IWorkflowEditorActorAccessor actors,
     WorkflowFieldCatalog? fields = null,
-    IServiceProvider? services = null) : IWorkflowBuilderClient
+    IServiceProvider? services = null,
+    ILogger<EfWorkflowBuilderClient>? logger = null) : IWorkflowBuilderClient
 {
+    /// <summary>Most options a picker is offered; the author narrows with a search.</summary>
+    private const int MaxOptions = 20;
+
     /// <summary>
     /// Who is editing. Every row this class writes is attributed to them, so a host without
     /// authentication still has to answer — see <see cref="IWorkflowEditorActorAccessor"/>.
@@ -153,6 +158,13 @@ public sealed class EfWorkflowBuilderClient(
     /// A lookup asks the host's options delegate. An actor field with no delegate of its
     /// own asks the directory — the same one the reassign picker uses — so a host gets
     /// actor pickers without writing anything.
+    ///
+    /// <para>The actor fallback loads the host's whole directory and filters it in memory
+    /// on every call, so the UI should debounce what the author types.</para>
+    ///
+    /// <para>Never more than <see cref="MaxOptions"/>, and never an error: a host's lookup
+    /// that throws offers nothing (and is logged), because a broken picker should not take
+    /// the builder down with it.</para>
     /// </summary>
     public async Task<IReadOnlyList<FieldChoice>> SearchFieldOptionsAsync(
         string subjectType, string target, string field, string? search, CancellationToken ct = default)
@@ -164,32 +176,40 @@ public sealed class EfWorkflowBuilderClient(
         }
 
         var match = registration.Fields.FirstOrDefault(f => f.Key == field);
+        search = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
 
-        if (match?.Options is { } optionsOf)
+        try
         {
-            return await optionsOf(new FieldOptionsContext(search, services), ct).ConfigureAwait(false);
+            if (match?.Options is { } optionsOf)
+            {
+                var offered = await optionsOf(new FieldOptionsContext(search, services), ct).ConfigureAwait(false);
+
+                return [.. offered.Take(MaxOptions)];
+            }
+
+            if (match?.Kind != FieldKind.Actor
+                || services.GetService(typeof(IWorkflowActorResolver)) is not IWorkflowActorResolver directory)
+            {
+                return [];
+            }
+
+            var people = await directory.GetActorsAsync(ct).ConfigureAwait(false);
+
+            return [.. people
+                .Where(a => search is null
+                    || a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                    || a.ActorId.Contains(search, StringComparison.OrdinalIgnoreCase))
+                .Take(MaxOptions)
+                .Select(a => new FieldChoice(a.ActorId, a.DisplayName))];
         }
-
-        if (match?.Kind != FieldKind.Actor)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            logger?.LogWarning(ex,
+                "Could not list options for {SubjectType} {Target} {Field}; offering none.",
+                subjectType, target, field);
+
             return [];
         }
-
-        var directory = services.GetService(typeof(IWorkflowActorResolver)) as IWorkflowActorResolver;
-
-        if (directory is null)
-        {
-            return [];
-        }
-
-        var people = await directory.GetActorsAsync(ct).ConfigureAwait(false);
-
-        return [.. people
-            .Where(a => string.IsNullOrWhiteSpace(search)
-                || a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
-                || a.ActorId.Contains(search, StringComparison.OrdinalIgnoreCase))
-            .Take(20)
-            .Select(a => new FieldChoice(a.ActorId, a.DisplayName))];
     }
 
     public async Task<IReadOnlyList<OutcomeTypeOption>> GetOutcomeTypesAsync(
@@ -407,9 +427,20 @@ public sealed class EfWorkflowBuilderClient(
                     continue;
                 }
 
-                var targetKey = trigger.Configuration.GetValueOrDefault("target");
+                // Read the way TriggerConfig reads it: keys without regard to case.
+                var configuration = new Dictionary<string, string?>(trigger.Configuration, StringComparer.OrdinalIgnoreCase);
+                var targetKey = configuration.GetValueOrDefault("target");
 
-                if (targetKey is null || !fields.TryGetTarget(model.SubjectType, targetKey, out var target))
+                if (string.IsNullOrWhiteSpace(targetKey))
+                {
+                    errors.Add(new("FIELDS_NO_TARGET", $"'{task.Label}' updates fields but has no target chosen."));
+                    continue;
+                }
+
+                // Target and field keys match ordinally on purpose: they come from a picker,
+                // and the runtime matches them the same way. (TriggerKey above is
+                // case-insensitive, by the existing convention for trigger keys.)
+                if (!fields.TryGetTarget(model.SubjectType, targetKey, out var target))
                 {
                     errors.Add(new("FIELDS_UNKNOWN_TARGET",
                         $"'{task.Label}': {model.SubjectType} has no '{targetKey}' to update."));
@@ -420,11 +451,17 @@ public sealed class EfWorkflowBuilderClient(
 
                 try
                 {
-                    assignments = FieldAssignments.Parse(trigger.Configuration.GetValueOrDefault("assignments"));
+                    assignments = FieldAssignments.Parse(configuration.GetValueOrDefault("assignments"));
                 }
                 catch (FormatException ex)
                 {
                     errors.Add(new("FIELDS_BAD_CONFIG", $"'{task.Label}': {ex.Message}"));
+                    continue;
+                }
+
+                if (assignments.Count == 0)
+                {
+                    errors.Add(new("FIELDS_NO_FIELDS", $"'{task.Label}' updates fields but sets none."));
                     continue;
                 }
 
