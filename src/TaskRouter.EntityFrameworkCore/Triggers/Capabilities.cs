@@ -35,12 +35,14 @@ public sealed class WorkflowVariables(IWorkflowDbContext db, int runId, int? tas
 
             var stored = await db.WorkflowVariables
                 .Where(v => v.WorkflowRunId == runId && v.TaskId == scope && v.Name == name)
-                .Select(v => v.Value)
+                .Select(v => new { v.Value })
                 .FirstOrDefaultAsync(ct).ConfigureAwait(false);
 
+            // Existence, not a non-null value: a task-scoped variable set to null still shadows
+            // the run-scoped one, as it does in GetAllAsync.
             if (stored is not null)
             {
-                return stored;
+                return stored.Value;
             }
         }
 
@@ -56,7 +58,8 @@ public sealed class WorkflowVariables(IWorkflowDbContext db, int runId, int? tas
         // Tracked first: a variable an earlier trigger on this event added has not been saved,
         // so the database cannot see it, and adding again would violate the unique index.
         var existing = db.WorkflowVariables.Local.FirstOrDefault(
-                v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name == name)
+                v => v.WorkflowRunId == runId && v.TaskId == taskId
+                    && string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase))
             ?? await db.WorkflowVariables
                 .SingleOrDefaultAsync(
                     v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name == name, ct)

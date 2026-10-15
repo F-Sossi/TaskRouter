@@ -19,6 +19,7 @@ public class TriggerReportTests
 {
     private TestHost _host = null!;
     private int _workflowId;
+    private readonly List<(string Name, string Value)> _pendingVariables = [];
 
     [TestInitialize]
     public async Task Setup()
@@ -97,7 +98,7 @@ public class TriggerReportTests
     [TestMethod]
     public async Task Substituted_text_is_not_rendered_again()
     {
-        await SetRunVariableAsync("echo", "{actor}");
+        QueueRunVariable("echo", "{actor}");
 
         Assert.AreEqual("{actor}", await RenderAsync("{var:echo}"));
     }
@@ -105,7 +106,7 @@ public class TriggerReportTests
     [TestMethod]
     public async Task A_variable_name_is_trimmed()
     {
-        await SetRunVariableAsync("colour", "blue");
+        QueueRunVariable("colour", "blue");
 
         Assert.AreEqual("blue", await RenderAsync("{var: colour}"));
     }
@@ -117,6 +118,27 @@ public class TriggerReportTests
 
         AddSetVariable(entryDefinitionId, 0, "dup", "a");
         AddSetVariable(entryDefinitionId, 1, "dup", "b");
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        var rows = await _host.Db.WorkflowVariables.AsNoTracking()
+            .Where(v => v.WorkflowRunId == runId && v.Name == "dup")
+            .ToListAsync();
+
+        Assert.HasCount(1, rows);
+        Assert.AreEqual("b", rows[0].Value);
+    }
+
+    [TestMethod]
+    public async Task Variable_names_match_regardless_of_case_within_one_event()
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        AddSetVariable(entryDefinitionId, 0, "dup", "a");
+        AddSetVariable(entryDefinitionId, 1, "Dup", "b");
 
         await _host.Db.SaveChangesAsync();
         _host.Db.ChangeTracker.Clear();
@@ -206,13 +228,7 @@ public class TriggerReportTests
             .Select(v => v.Value)
             .SingleAsync();
 
-    private async Task SetRunVariableAsync(string name, string value)
-    {
-        _pendingVariables.Add((name, value));
-        await Task.CompletedTask;
-    }
-
-    private readonly List<(string Name, string Value)> _pendingVariables = [];
+    private void QueueRunVariable(string name, string value) => _pendingVariables.Add((name, value));
 
     /// <summary>Renders a SetVariable value through the real engine and returns what was stored.</summary>
     private async Task<string?> RenderAsync(string template)
