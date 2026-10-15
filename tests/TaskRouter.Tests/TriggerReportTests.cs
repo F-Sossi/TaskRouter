@@ -59,13 +59,71 @@ public class TriggerReportTests
     [TestMethod]
     public async Task An_after_commit_trigger_report_lands_on_its_execution()
     {
-        await CompleteWithTriggerAsync(ReportingTrigger.TriggerKey, TriggerDispatchMode.AfterCommit, drain: true);
+        var execution = await CompleteWithTriggerAsync(
+            ReportingTrigger.TriggerKey, TriggerDispatchMode.AfterCommit, drain: true);
 
-        var execution = await _host.Db.WorkflowTriggerExecutions.AsNoTracking()
-            .Where(e => e.Detail != null)
-            .SingleAsync();
-
+        Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
         Assert.AreEqual("did the thing", execution.Detail);
+    }
+
+    [TestMethod]
+    public async Task A_failing_after_commit_trigger_leaves_detail_empty()
+    {
+        var execution = await CompleteWithTriggerAsync(
+            FailingReportingTrigger.TriggerKey, TriggerDispatchMode.AfterCommit, drain: true);
+
+        Assert.AreEqual(TriggerExecutionStatus.Failed, execution.Status);
+        Assert.IsNull(execution.Detail);
+    }
+
+    [TestMethod]
+    public async Task Now_renders_as_a_round_trip_utc_timestamp()
+    {
+        var probe = await RenderAsync("{now}") ?? string.Empty;
+
+        var parsed = DateTime.ParseExact(
+            probe, "O", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind);
+
+        Assert.AreEqual(DateTimeKind.Utc, parsed.Kind);
+    }
+
+    [TestMethod]
+    public async Task An_oversized_day_offset_passes_through_literally()
+    {
+        Assert.AreEqual("{today+999999d}|{today+99999999999d}", await RenderAsync("{today+999999d}|{today+99999999999d}"));
+    }
+
+    [TestMethod]
+    public async Task Substituted_text_is_not_rendered_again()
+    {
+        await SetRunVariableAsync("echo", "{actor}");
+
+        Assert.AreEqual("{actor}", await RenderAsync("{var:echo}"));
+    }
+
+    [TestMethod]
+    public async Task A_variable_name_is_trimmed()
+    {
+        await SetRunVariableAsync("colour", "blue");
+
+        Assert.AreEqual("blue", await RenderAsync("{var: colour}"));
+    }
+
+    [TestMethod]
+    public async Task A_later_trigger_sees_a_variable_an_earlier_one_set_on_the_same_event()
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        AddSetVariable(entryDefinitionId, 0, "first", "one");
+        AddSetVariable(entryDefinitionId, 1, "second", "{var:first}");
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        Assert.AreEqual("one", await ReadVariableAsync(runId, "second"));
     }
 
     [TestMethod]
@@ -95,19 +153,71 @@ public class TriggerReportTests
         await _host.Db.SaveChangesAsync();
         _host.Db.ChangeTracker.Clear();
 
+        // Read the date on both sides of the call so a run across midnight cannot fail the test.
+        var before = DateTime.UtcNow.Date;
         (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+        var after = DateTime.UtcNow.Date;
 
-        var probe = await _host.Db.WorkflowVariables.AsNoTracking()
-            .Where(v => v.WorkflowRunId == runId && v.Name == "probe")
+        var probe = await ReadVariableAsync(runId, "probe");
+
+        string Day(DateTime d) => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        string Expected(DateTime t) =>
+            $"user-originator|{Day(t)}|{Day(t.AddDays(2))}|{Day(t.AddDays(-1))}|blue||{{nope}}";
+
+        Assert.IsTrue(probe == Expected(before) || probe == Expected(after), probe);
+    }
+
+    private void AddSetVariable(int definitionId, int order, string name, string value) =>
+        _host.Db.WorkflowTriggerDefinitions.Add(new TriggerDefinition
+        {
+            TaskDefinitionId = definitionId,
+            TriggerKey = BuiltInTriggerKeys.SetVariable,
+            Event = WorkflowEventKind.TaskCompleted,
+            Order = order,
+            Configuration = System.Text.Json.JsonSerializer.Serialize(new { name, value }),
+            CreatorId = "system",
+            ModifierId = "system"
+        });
+
+    private async Task<string?> ReadVariableAsync(int runId, string name) =>
+        await _host.Db.WorkflowVariables.AsNoTracking()
+            .Where(v => v.WorkflowRunId == runId && v.Name == name)
             .Select(v => v.Value)
             .SingleAsync();
 
-        var today = DateTime.UtcNow.Date;
-        string Day(DateTime d) => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+    private async Task SetRunVariableAsync(string name, string value)
+    {
+        _pendingVariables.Add((name, value));
+        await Task.CompletedTask;
+    }
 
-        Assert.AreEqual(
-            $"user-originator|{Day(today)}|{Day(today.AddDays(2))}|{Day(today.AddDays(-1))}|blue||{{nope}}",
-            probe);
+    private readonly List<(string Name, string Value)> _pendingVariables = [];
+
+    /// <summary>Renders a SetVariable value through the real engine and returns what was stored.</summary>
+    private async Task<string?> RenderAsync(string template)
+    {
+        var (runId, entryTaskId, entryDefinitionId) = await StartAsync();
+
+        foreach (var (name, value) in _pendingVariables)
+        {
+            _host.Db.WorkflowVariables.Add(new WorkflowVariable
+            {
+                WorkflowRunId = runId,
+                Name = name,
+                Value = value,
+                CreatorId = "system",
+                ModifierId = "system"
+            });
+        }
+
+        AddSetVariable(entryDefinitionId, 0, "probe", template);
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        return await ReadVariableAsync(runId, "probe");
     }
 
     private async Task<(int RunId, int EntryTaskId, int EntryDefinitionId)> StartAsync()

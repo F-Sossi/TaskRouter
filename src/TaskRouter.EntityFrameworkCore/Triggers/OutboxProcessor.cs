@@ -122,6 +122,7 @@ public sealed class OutboxProcessor(
 
         try
         {
+            // A failed attempt leaves Detail unchanged: its writes rolled back with its own transaction.
             execution.Detail = await ExecuteIsolatedAsync(message, definition, ct).ConfigureAwait(false);
 
             message.Status = OutboxStatus.Succeeded;

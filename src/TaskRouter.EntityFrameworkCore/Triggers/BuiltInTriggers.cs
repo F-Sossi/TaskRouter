@@ -35,7 +35,7 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         [
             new("name", "Variable name", TriggerParameterKind.Text, Required: true),
             new("value", "Value", TriggerParameterKind.Text,
-                HelpText: "Supports {task.outcome}, {task.branch}, {task.id}, {event}, {actor}, {today}, {today+Nd}, {now}, {var:name}."),
+                HelpText: "Supports {task.outcome}, {task.branch}, {task.id}, {event}, {actor}, {today}, {today+Nd}, {today-Nd}, {now}, {var:name}."),
             new("scope", "Scope", TriggerParameterKind.Choice,
                 DefaultValue: "run", Choices: ["run", "task"])
         ],
@@ -287,36 +287,58 @@ internal static partial class TriggerTemplate
             return rendered;
         }
 
-        var now = DateTime.UtcNow;
+        var matches = ContextToken().Matches(rendered);
 
-        rendered = rendered
-            .Replace("{actor}", context.ActorId, StringComparison.OrdinalIgnoreCase)
-            .Replace("{now}", now.ToString("O", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
-
-        rendered = TodayToken().Replace(rendered, match =>
+        if (matches.Count == 0)
         {
-            var days = match.Groups["n"].Success
-                ? int.Parse(match.Groups["n"].Value, CultureInfo.InvariantCulture)
-                    * (match.Groups["sign"].Value == "-" ? -1 : 1)
-                : 0;
-
-            return now.Date.AddDays(days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        });
-
-        if (VariableToken().IsMatch(rendered))
-        {
-            var variables = await context.Variables.GetAllAsync(ct).ConfigureAwait(false);
-
-            rendered = VariableToken().Replace(rendered, match =>
-                variables.TryGetValue(match.Groups["name"].Value, out var value) ? value ?? string.Empty : string.Empty);
+            return rendered;
         }
 
-        return rendered;
+        IReadOnlyDictionary<string, string?>? variables = null;
+
+        if (rendered.Contains("{var:", StringComparison.OrdinalIgnoreCase))
+        {
+            variables = await context.Variables.GetAllAsync(ct).ConfigureAwait(false);
+        }
+
+        var now = DateTime.UtcNow;
+
+        // One pass: text a token substitutes is never rescanned, so a variable whose value
+        // looks like a token stays as it was written.
+        return ContextToken().Replace(rendered, match =>
+        {
+            if (match.Groups["actor"].Success)
+            {
+                return context.ActorId;
+            }
+
+            if (match.Groups["now"].Success)
+            {
+                return now.ToString("O", CultureInfo.InvariantCulture);
+            }
+
+            if (match.Groups["today"].Success)
+            {
+                var days = match.Groups["n"].Success
+                    ? int.Parse(match.Groups["n"].Value, CultureInfo.InvariantCulture)
+                        * (match.Groups["sign"].Value == "-" ? -1 : 1)
+                    : 0;
+
+                return now.Date.AddDays(days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
+
+            var name = match.Groups["name"].Value.Trim();
+
+            return variables is not null && variables.TryGetValue(name, out var value)
+                ? value ?? string.Empty
+                : string.Empty;
+        });
     }
 
-    [GeneratedRegex(@"\{today(?:(?<sign>[+-])(?<n>\d+)d)?\}", RegexOptions.IgnoreCase)]
-    private static partial Regex TodayToken();
-
-    [GeneratedRegex(@"\{var:(?<name>[^}]+)\}", RegexOptions.IgnoreCase)]
-    private static partial Regex VariableToken();
+    // The offset is at most five digits so it can neither overflow int.Parse nor AddDays;
+    // a longer one does not match and passes through literally like any unknown token.
+    [GeneratedRegex(
+        @"\{(?:(?<actor>actor)|(?<now>now)|(?<today>today)(?:(?<sign>[+-])(?<n>\d{1,5})d)?|var:(?<name>[^}]+))\}",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex ContextToken();
 }
