@@ -76,16 +76,18 @@ internal sealed class FieldWriteScope : IAsyncDisposable
     }
 
     /// <summary>A record's identity for the change summary: its CLR type and key values.</summary>
-    public string Describe(object entity)
+    public string Describe(object entity) => $"{_db.Entry(entity).Metadata.ClrType.Name} {KeyOf(entity)}";
+
+    /// <summary>A record's primary key values, comma-separated; "?" for a keyless type.</summary>
+    public string KeyOf(object entity)
     {
         var entry = _db.Entry(entity);
         var key = entry.Metadata.FindPrimaryKey();
 
-        var id = key is null
+        return key is null
             ? "?"
-            : string.Join(",", key.Properties.Select(p => entry.Property(p.Name).CurrentValue));
-
-        return $"{entry.Metadata.ClrType.Name} {id}";
+            : string.Join(",", key.Properties.Select(p =>
+                Convert.ToString(entry.Property(p.Name).CurrentValue, System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     /// <summary>

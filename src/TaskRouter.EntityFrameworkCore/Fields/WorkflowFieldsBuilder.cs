@@ -153,8 +153,14 @@ public sealed class SubjectFieldsBuilder
             Label = label,
             Cardinality = cardinality,
             Resolve = async (context, ct) =>
-                (await (limit ? resolve(context).Take(2) : resolve(context)).ToListAsync(ct).ConfigureAwait(false))
-                    .Cast<object>().ToList()
+            {
+                // Tracked whatever the resolver or the context's default says: the writes go
+                // through the change tracker, and an untracked record would be changed in
+                // memory, reported as updated, and never saved.
+                var query = resolve(context).AsTracking();
+                var records = await (limit ? query.Take(2) : query).ToListAsync(ct).ConfigureAwait(false);
+                return records.Cast<object>().ToList();
+            }
         };
 
         _root.Add(declaration);

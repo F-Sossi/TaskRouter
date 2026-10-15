@@ -135,10 +135,14 @@ public static class FieldValueConverter
                 f.GetCustomAttribute<DisplayAttribute>()?.GetName() ?? f.Name))];
     }
 
-    /// <summary>A value as the change summary shows it. Null means empty.</summary>
+    /// <summary>
+    /// A value as the change summary shows it. Null means empty, and an empty string is
+    /// empty too, so the summary shows both the same way rather than as a bare arrow.
+    /// </summary>
     public static string? Format(object? value) => value switch
     {
         null => null,
+        "" => null,
         DateTime d when d.TimeOfDay == TimeSpan.Zero => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         DateTime d => d.ToString("O", CultureInfo.InvariantCulture),
         bool b => b ? "true" : "false",

@@ -1,4 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+
+using DemoDocuments.Server.Data;
 
 using DemoDocuments.Server.Domain;
 using DemoDocuments.Server.Workflow;
@@ -7,6 +10,7 @@ using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Fields;
 using TaskRouter.Core.Model;
 
+using TaskRouter.EntityFrameworkCore.Fields;
 using TaskRouter.EntityFrameworkCore.Triggers;
 
 namespace TaskRouter.Tests;
@@ -40,7 +44,7 @@ public class UpdateFieldsTriggerEndToEndTests
 
         var execution = await ExecutionAsync();
         Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
-        Assert.AreEqual($"ChangeRequest {document.Id} Status: Scheduled → OnHold", execution.Detail);
+        Assert.AreEqual($"document {document.Id} Status: Scheduled → OnHold", execution.Detail);
     }
 
     [TestMethod]
@@ -178,10 +182,7 @@ public class UpdateFieldsTriggerEndToEndTests
         await AddWorkItemsAsync(document, "C100", "C200");
         var taskId = await StartWithTriggerAsync(document, "branchWorkItem", [new("WorkItemState", nameof(WorkItemStatus.InProgress))]);
 
-        var task = await _host.Db.WorkflowTasks.SingleAsync(t => t.Id == taskId);
-        task.AssignedBranchKey = "C200";
-        await _host.Db.SaveChangesAsync();
-        _host.Db.ChangeTracker.Clear();
+        await SetBranchAsync(taskId, "C200");
 
         (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
 
@@ -204,7 +205,7 @@ public class UpdateFieldsTriggerEndToEndTests
         var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
 
         Assert.IsTrue(result.IsError);
-        StringAssert.Contains(result.UnwrapError().Message, "There is no work item for this task's section to update");
+        StringAssert.Contains(result.UnwrapError().Message, "'Work item for this task's section' found nothing to update.");
     }
 
     [TestMethod]
@@ -223,21 +224,317 @@ public class UpdateFieldsTriggerEndToEndTests
         Assert.AreEqual(DocumentStatus.Scheduled, await StatusOfAsync(document.Id));
     }
 
+    [TestMethod]
+    public async Task A_subject_that_is_not_a_document_fails_saying_so()
+    {
+        var taskId = await StartWithTriggerAsync("999999999", "document", [new("Status", "OnHold")]);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message, "'This document' found nothing to update.");
+    }
+
+    [TestMethod]
+    public async Task A_one_target_matching_two_records_fails_saying_so()
+    {
+        // The demo allows one work item per section, so its branch target cannot match two.
+        // The test catalog's "oneItem" is a One target over every work item on the document.
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, configure: s => s.AddSingleton(TestCatalog([])));
+
+        var document = await NewChangeRequestAsync();
+        await AddWorkItemsAsync(document, "C100", "C200");
+        var taskId = await StartWithTriggerAsync(document, "oneItem", [new("WorkItemState", nameof(WorkItemStatus.InProgress))]);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message,
+            "'One work item' matched more than one record; it must match exactly one.");
+    }
+
+    [TestMethod]
+    public async Task A_many_target_with_no_records_has_nothing_to_change()
+    {
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "allWorkItems", [new("WorkItemState", nameof(WorkItemStatus.InProgress))]);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        var execution = await ExecutionAsync();
+        Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
+        Assert.AreEqual("Nothing to change.", execution.Detail);
+    }
+
+    [TestMethod]
+    public async Task An_unknown_target_fails_with_a_sentence()
+    {
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "nope", [new("Status", "OnHold")]);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message,
+            "This step updates 'nope', which ChangeRequest documents do not have.");
+    }
+
+    [TestMethod]
+    public async Task A_missing_target_fails_with_a_sentence()
+    {
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithConfigurationAsync(IdOf(document), new Dictionary<string, string?>
+        {
+            ["assignments"] = FieldAssignments.Serialize([new("Status", "OnHold")])
+        });
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message, "This step's field update has no target configured.");
+    }
+
+    [TestMethod]
+    public async Task No_fields_fails_with_a_sentence()
+    {
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", []);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message, "This step's field update has no fields configured.");
+    }
+
+    [TestMethod]
+    public async Task An_unparseable_value_fails_naming_the_field()
+    {
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("InternalDueDate", "abc")]);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message, "Internal due date: 'abc' is not");
+    }
+
+    [TestMethod]
+    public async Task A_record_of_the_wrong_type_is_a_misconfiguration_said_plainly()
+    {
+        // A change-request workflow pointed at a drawing: the "document" target finds a
+        // Drawing, which has no Urgency.
+        var drawing = new Drawing { Title = "Deck plan", DocNumber = $"DW-{Guid.NewGuid():N}"[..12] };
+        _host.Db.Drawings.Add(drawing);
+        await _host.Db.SaveChangesAsync();
+
+        var taskId = await StartWithTriggerAsync(drawing, "document", [new("Urgency", "Priority")]);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message,
+            "This step's field update is misconfigured: 'This document' found a record without 'Urgency'. "
+            + "Ask whoever maintains this workflow.");
+    }
+
+    [TestMethod]
+    public async Task OnWritten_runs_on_a_changed_record_and_not_on_an_unchanged_one()
+    {
+        // A test catalog whose hook records what it ran on: the demo's own hook touches
+        // WorkItem.Modified, which the seeded workflow's progress reporting also touches.
+        var written = new List<int>();
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, configure: s => s.AddSingleton(TestCatalog(written)));
+
+        var document = await NewChangeRequestAsync();
+        var c100 = await _host.Db.Sections.Where(s => s.Code == "C100").Select(s => s.Id).SingleAsync();
+        var c200 = await _host.Db.Sections.Where(s => s.Code == "C200").Select(s => s.Id).SingleAsync();
+
+        var changing = new WorkItem { DocumentId = document.Id, AssignedSectionId = c100 };
+        var unchanged = new WorkItem
+        {
+            DocumentId = document.Id, AssignedSectionId = c200, WorkItemState = WorkItemStatus.InProgress
+        };
+        _host.Db.WorkItems.AddRange(changing, unchanged);
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        var taskId = await StartWithTriggerAsync(document, "items", [new("WorkItemState", nameof(WorkItemStatus.InProgress))]);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        CollectionAssert.AreEqual(new[] { changing.Id }, written.ToArray(),
+            "OnWritten must run on the item whose state changed, and only on it.");
+    }
+
+    [TestMethod]
+    public async Task The_system_actor_is_not_checked_by_the_policy()
+    {
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, policy: new DenyFieldsPolicy());
+
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("Status", "OnHold")]);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", WorkflowActors.System)).Unwrap();
+
+        Assert.AreEqual(DocumentStatus.OnHold, await StatusOfAsync(document.Id));
+    }
+
+    [TestMethod]
+    public async Task The_policy_is_told_the_subject_target_and_fields()
+    {
+        var policy = new CapturingPolicy();
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, policy: policy);
+
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("Status", "OnHold")]);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        var seen = policy.FieldUpdates.Single();
+        Assert.AreEqual("user-originator", seen.ActorId);
+        Assert.AreEqual(new WorkflowSubject("ChangeRequest", IdOf(document)), seen.Subject);
+        Assert.IsNotNull(seen.Task);
+        Assert.AreEqual("document", seen.FieldTarget);
+        CollectionAssert.AreEqual(new[] { "Status" }, seen.Fields.ToArray());
+    }
+
+    [TestMethod]
+    public async Task A_policy_that_throws_denies_the_update()
+    {
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, policy: new ThrowingFieldsPolicy());
+
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("Status", "OnHold")]);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        Assert.IsInstanceOfType<WorkflowAuthorizationException>(result.UnwrapError());
+        StringAssert.Contains(result.UnwrapError().Message, "the authorization policy failed");
+        Assert.AreEqual(DocumentStatus.Scheduled, await StatusOfAsync(document.Id));
+    }
+
+    [TestMethod]
+    public async Task After_commit_the_update_lands_when_the_outbox_drains()
+    {
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("Status", "OnHold")],
+            dispatch: TriggerDispatchMode.AfterCommit);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+        Assert.AreEqual(DocumentStatus.Scheduled, await StatusOfAsync(document.Id), "Not before the outbox runs.");
+
+        await _host.Outbox.ProcessPendingAsync();
+
+        Assert.AreEqual(DocumentStatus.OnHold, await StatusOfAsync(document.Id));
+        var execution = await ExecutionAsync();
+        Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
+    }
+
+    [TestMethod]
+    public async Task A_resolver_that_does_not_track_still_has_its_writes_saved()
+    {
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, configure: s => s.AddSingleton(TestCatalog([])));
+
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "untracked", [new("Comments", "landed")]);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        _host.Db.ChangeTracker.Clear();
+        Assert.AreEqual("landed",
+            (await _host.Db.Documents.AsNoTracking().SingleAsync(d => d.Id == document.Id)).Comments);
+    }
+
     // ───────────────────────────── Fixtures ─────────────────────────────
 
-    private async Task<int> StartWithTriggerAsync(
+    /// <summary>
+    /// A test catalog: a target whose resolver asks for untracked entities, which writes
+    /// must survive; a One target that can match several work items; and a work-item
+    /// target whose OnWritten hook records each record it ran on.
+    /// </summary>
+    private static WorkflowFieldCatalog TestCatalog(List<int> written)
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("ChangeRequest")
+            .Target<DocumentBase>("untracked", "This document, untracked", FieldCardinality.One, context =>
+            {
+                var id = int.Parse(context.Subject.SubjectId, System.Globalization.CultureInfo.InvariantCulture);
+                return context.Db<DemoDbContext>().Documents.AsNoTracking().Where(d => d.Id == id);
+            })
+                .Field(d => d.Comments, "Comments")
+            .Target<WorkItem>("oneItem", "One work item", FieldCardinality.One, context =>
+            {
+                var id = int.Parse(context.Subject.SubjectId, System.Globalization.CultureInfo.InvariantCulture);
+                return context.Db<DemoDbContext>().WorkItems.Where(w => w.DocumentId == id);
+            })
+                .Field(w => w.WorkItemState, "State")
+            .Target<WorkItem>("items", "Work items", FieldCardinality.Many, context =>
+            {
+                var id = int.Parse(context.Subject.SubjectId, System.Globalization.CultureInfo.InvariantCulture);
+                return context.Db<DemoDbContext>().WorkItems.Where(w => w.DocumentId == id);
+            })
+                .Field(w => w.WorkItemState, "State")
+                .OnWritten((item, _, _) =>
+                {
+                    written.Add(item.Id);
+                    return Task.CompletedTask;
+                });
+        return fields.Build();
+    }
+
+    private static string IdOf(DocumentBase document) =>
+        document.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private async Task SetBranchAsync(int taskId, string branchKey)
+    {
+        var task = await _host.Db.WorkflowTasks.SingleAsync(t => t.Id == taskId);
+        task.AssignedBranchKey = branchKey;
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+    }
+
+    private Task<int> StartWithTriggerAsync(
         DocumentBase document,
         string target,
         IReadOnlyList<FieldAssignment> assignments,
         TriggerFailurePolicy policy = TriggerFailurePolicy.FailOperation,
-        string subjectType = "ChangeRequest")
+        string subjectType = "ChangeRequest",
+        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction) =>
+        StartWithTriggerAsync(IdOf(document), target, assignments, policy, subjectType, dispatch);
+
+    private Task<int> StartWithTriggerAsync(
+        string subjectId,
+        string target,
+        IReadOnlyList<FieldAssignment> assignments,
+        TriggerFailurePolicy policy = TriggerFailurePolicy.FailOperation,
+        string subjectType = "ChangeRequest",
+        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction) =>
+        StartWithConfigurationAsync(subjectId, new Dictionary<string, string?>
+        {
+            ["target"] = target,
+            ["assignments"] = FieldAssignments.Serialize(assignments)
+        }, policy, subjectType, dispatch);
+
+    private async Task<int> StartWithConfigurationAsync(
+        string subjectId,
+        Dictionary<string, string?> configuration,
+        TriggerFailurePolicy policy = TriggerFailurePolicy.FailOperation,
+        string subjectType = "ChangeRequest",
+        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction)
     {
         var workflowId = await _host.Db.WorkflowDefinitions
             .Where(w => w.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName)
             .Select(w => w.Id)
             .SingleAsync();
 
-        var subject = new WorkflowSubject(subjectType, document.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var subject = new WorkflowSubject(subjectType, subjectId);
         var run = (await _host.Engine.StartRunAsync(subject, workflowId, "user-originator")).Unwrap();
         var taskId = run.Tasks.Single().Id;
 
@@ -249,12 +546,9 @@ public class UpdateFieldsTriggerEndToEndTests
             TaskDefinitionId = definitionId,
             TriggerKey = BuiltInTriggerKeys.UpdateFields,
             Event = WorkflowEventKind.TaskCompleted,
+            DispatchMode = dispatch,
             FailurePolicy = policy,
-            Configuration = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string?>
-            {
-                ["target"] = target,
-                ["assignments"] = FieldAssignments.Serialize(assignments)
-            }),
+            Configuration = System.Text.Json.JsonSerializer.Serialize(configuration),
             CreatorId = "system",
             ModifierId = "system"
         });
@@ -313,5 +607,30 @@ public class UpdateFieldsTriggerEndToEndTests
             Task.FromResult(operation == WorkflowOperation.UpdateSubjectFields
                 ? WorkflowAuthorizationResult.Denied("fields are frozen")
                 : WorkflowAuthorizationResult.Allowed);
+    }
+
+    private sealed class ThrowingFieldsPolicy : IWorkflowAuthorizationPolicy
+    {
+        public Task<WorkflowAuthorizationResult> EvaluateAsync(
+            WorkflowOperation operation, WorkflowAuthorizationContext context, CancellationToken ct = default) =>
+            operation == WorkflowOperation.UpdateSubjectFields
+                ? throw new InvalidOperationException("the policy's database is down")
+                : Task.FromResult(WorkflowAuthorizationResult.Allowed);
+    }
+
+    private sealed class CapturingPolicy : IWorkflowAuthorizationPolicy
+    {
+        public List<WorkflowAuthorizationContext> FieldUpdates { get; } = [];
+
+        public Task<WorkflowAuthorizationResult> EvaluateAsync(
+            WorkflowOperation operation, WorkflowAuthorizationContext context, CancellationToken ct = default)
+        {
+            if (operation == WorkflowOperation.UpdateSubjectFields)
+            {
+                FieldUpdates.Add(context);
+            }
+
+            return Task.FromResult(WorkflowAuthorizationResult.Allowed);
+        }
     }
 }

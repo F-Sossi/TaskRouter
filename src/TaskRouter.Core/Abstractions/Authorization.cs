@@ -74,9 +74,10 @@ public enum WorkflowOperation
 /// <see cref="Task"/> is null exactly when the operation is
 /// <see cref="WorkflowOperation.StartRun"/>, which has no task yet;
 /// <see cref="WorkflowDefinitionId"/> is set exactly then and null otherwise.
-/// <see cref="Subject"/> is set then and for <see cref="WorkflowOperation.UpdateSubjectFields"/>,
-/// whose fields belong to the subject, and null otherwise. One record rather than two context types, because a host switching on
-/// the operation already knows which shape it is holding.
+/// <see cref="Subject"/> is set then and for
+/// <see cref="WorkflowOperation.UpdateSubjectFields"/>, whose fields belong to the
+/// subject, and null otherwise. One record rather than two context types, because a host
+/// switching on the operation already knows which shape it is holding.
 /// </summary>
 public sealed record WorkflowAuthorizationContext(
     string ActorId,

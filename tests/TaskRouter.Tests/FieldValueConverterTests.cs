@@ -125,6 +125,14 @@ public class FieldValueConverterTests
     }
 
     [TestMethod]
+    public void An_empty_string_formats_as_empty_like_null()
+    {
+        // Null means empty, and the change summary shows it as "(empty)". An empty string
+        // must too, or a summary would end in a bare arrow.
+        Assert.IsNull(FieldValueConverter.Format(string.Empty));
+    }
+
+    [TestMethod]
     public void Assignments_round_trip_through_their_stored_json()
     {
         var json = FieldAssignments.Serialize([new("Status", "Hold"), new("Comments", null)]);

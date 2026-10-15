@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Fields;
 using TaskRouter.Core.Model;
@@ -14,13 +16,25 @@ namespace TaskRouter.EntityFrameworkCore.Fields;
 ///
 /// <para>Order of work is deliberate. Everything that can be checked without touching
 /// data — target, fields, values, permission — is checked first, so a misconfigured
-/// trigger fails before any record is loaded. Only then does it resolve and write.</para>
+/// trigger fails before any record is loaded. Then the undo scope begins, which saves the
+/// engine's pending work: records added earlier in the same event are in the database
+/// before the target's resolver looks for them. Only then does it resolve and write.</para>
+///
+/// <para>Meant to run <see cref="TriggerDispatchMode.InTransaction"/>, its default. It can be
+/// dispatched after commit or in the background, but then: <see cref="TriggerFailurePolicy.FailOperation"/>
+/// cannot undo the step, which has already committed; the authorization policy runs with
+/// no HTTP request behind it, so it must judge by the context's actor id and not by an
+/// HttpContext; and a failed attempt's "Undone:" detail is not recorded, because the
+/// outbox records only the outcome of a failed attempt.</para>
 /// </summary>
 public sealed class UpdateFieldsTrigger(
     WorkflowFieldCatalog catalog,
     IWorkflowDbContext db,
-    IWorkflowAuthorizationPolicy policy) : IWorkflowTrigger
+    IWorkflowAuthorizationPolicy policy,
+    ILogger<UpdateFieldsTrigger> logger) : IWorkflowTrigger
 {
+    private const string NothingToChange = "Nothing to change.";
+
     public string Key => BuiltInTriggerKeys.UpdateFields;
 
     public TriggerDescriptor Describe() => new(
@@ -44,19 +58,24 @@ public sealed class UpdateFieldsTrigger(
         ArgumentNullException.ThrowIfNull(context);
 
         var subjectType = context.Subject.SubjectType;
-        var targetKey = context.Config.GetString("target")
-            ?? throw new InvalidOperationException("No target is configured.");
+        var targetKey = context.Config.GetString("target");
+
+        if (string.IsNullOrWhiteSpace(targetKey))
+        {
+            throw new InvalidOperationException("This step's field update has no target configured.");
+        }
 
         if (!catalog.TryGetTarget(subjectType, targetKey, out var target))
         {
-            throw new InvalidOperationException($"{subjectType} has no '{targetKey}' to update.");
+            throw new InvalidOperationException(
+                $"This step updates '{targetKey}', which {subjectType} documents do not have.");
         }
 
         var assignments = FieldAssignments.Parse(context.Config.GetString("assignments"));
 
         if (assignments.Count == 0)
         {
-            throw new InvalidOperationException("No fields are configured.");
+            throw new InvalidOperationException("This step's field update has no fields configured.");
         }
 
         var planned = new List<(FieldRegistration Field, object? Value)>();
@@ -77,20 +96,19 @@ public sealed class UpdateFieldsTrigger(
             planned.Add((field, value));
         }
 
-        await AuthorizeAsync(context, target, assignments, ct).ConfigureAwait(false);
+        await WorkflowAuthorization.EnsureAllowedAsync(
+            policy,
+            WorkflowOperation.UpdateSubjectFields,
+            new WorkflowAuthorizationContext(context.ActorId, context.Task, context.Subject, null)
+            {
+                FieldTarget = target.Key,
+                Fields = [.. assignments.Select(a => a.Field)]
+            },
+            logger,
+            ct).ConfigureAwait(false);
 
         var services = context.Services
             ?? throw new InvalidOperationException("Field updates need the trigger's service provider.");
-
-        var entities = await target.Resolve(new FieldResolveContext(context.Subject, context.Task, services), ct)
-            .ConfigureAwait(false);
-
-        if (target.Cardinality == FieldCardinality.One && entities.Count != 1)
-        {
-            throw new InvalidOperationException(entities.Count == 0
-                ? $"There is no {target.Label.ToLowerInvariant()} to update."
-                : $"'{target.Label}' found {entities.Count} records; it should find exactly one.");
-        }
 
         var write = new FieldWriteContext(context.ActorId, services);
         var changes = new List<string>();
@@ -101,6 +119,26 @@ public sealed class UpdateFieldsTrigger(
 
         try
         {
+            var entities = await target.Resolve(new FieldResolveContext(context.Subject, context.Task, services), ct)
+                .ConfigureAwait(false);
+
+            if (target.Cardinality == FieldCardinality.One && entities.Count != 1)
+            {
+                // The resolver takes at most two, so "more than one" is all the count can say.
+                throw new InvalidOperationException(entities.Count == 0
+                    ? $"'{target.Label}' found nothing to update."
+                    : $"'{target.Label}' matched more than one record; it must match exactly one.");
+            }
+
+            if (entities.Count == 0)
+            {
+                // A Many target with nothing under it: success, with nothing written. The
+                // scope began before resolving, so it is closed here with nothing in it.
+                await scope.SaveAndCompleteAsync(ct).ConfigureAwait(false);
+                context.Report.Detail = NothingToChange;
+                return;
+            }
+
             foreach (var entity in entities)
             {
                 var changed = false;
@@ -109,9 +147,10 @@ public sealed class UpdateFieldsTrigger(
                 {
                     if (!field.AppliesTo(entity))
                     {
+                        // The host's resolver returned a type the field is not declared on.
                         throw new InvalidOperationException(
-                            $"'{target.Label}' found a {entity.GetType().Name}, which has no '{field.Key}'. "
-                            + "The host's resolver for this subject type returns the wrong type.");
+                            $"This step's field update is misconfigured: '{target.Label}' found a record without "
+                            + $"'{field.Label}'. Ask whoever maintains this workflow.");
                     }
 
                     var before = field.Read(entity);
@@ -125,7 +164,7 @@ public sealed class UpdateFieldsTrigger(
                     changed = true;
 
                     changes.Add(
-                        $"{scope.Describe(entity)} {field.Label}: "
+                        $"{target.Key} {scope.KeyOf(entity)} {field.Label}: "
                         + $"{FieldValueConverter.Format(before) ?? "(empty)"} → {FieldValueConverter.Format(value) ?? "(empty)"}");
                 }
 
@@ -156,34 +195,6 @@ public sealed class UpdateFieldsTrigger(
             await scope.DisposeAsync().ConfigureAwait(false);
         }
 
-        context.Report.Detail = changes.Count == 0 ? "Nothing to change." : string.Join("; ", changes);
-    }
-
-    private async Task AuthorizeAsync(
-        WorkflowTriggerContext context,
-        TargetRegistration target,
-        IReadOnlyList<FieldAssignment> assignments,
-        CancellationToken ct)
-    {
-        // The deadline sweep is the system acting on its own schedule; see IWorkflowActions.
-        if (context.ActorId == WorkflowActors.System)
-        {
-            return;
-        }
-
-        var result = await policy.EvaluateAsync(
-            WorkflowOperation.UpdateSubjectFields,
-            new WorkflowAuthorizationContext(context.ActorId, context.Task, context.Subject, null)
-            {
-                FieldTarget = target.Key,
-                Fields = [.. assignments.Select(a => a.Field)]
-            },
-            ct).ConfigureAwait(false);
-
-        if (!result.IsAllowed)
-        {
-            throw new WorkflowAuthorizationException(
-                WorkflowOperation.UpdateSubjectFields, context.ActorId, result.Reason ?? "Not permitted.");
-        }
+        context.Report.Detail = changes.Count == 0 ? NothingToChange : string.Join("; ", changes);
     }
 }
