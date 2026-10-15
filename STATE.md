@@ -1,7 +1,7 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
+context. Last updated **2026-10-15**: field-update triggers, on branch `field-triggers` — not yet merged or versioned. A host declares which fields a workflow may set with `.AddWorkflowFields(...)`; the builder then offers an Update fields trigger (`workflow.updateFields`) with target, field and value pickers, validated at publish. Writes are all-or-nothing, checked as the acting user (`WorkflowOperation.UpdateSubjectFields`), and need database savepoints. The one schema change is `TaskRouterTriggerExecutions.Detail` (nullable), so hosts must add a migration. Also fixed along the way: variables set by an earlier trigger on the same event are now visible to later ones; setting a variable twice on one event updates it instead of adding a duplicate row; variable names match case-insensitively throughout; the engine and the trigger share one authorization helper. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
 reached, and nothing can be added under one. Before that, **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
 the validator and finishable in the runner. Before that, `0.1.0-preview.11` — people and org units are picked by
 typing rather than scrolling. Before that, **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
@@ -20,6 +20,14 @@ application. Before that, the type-registry work, and a round of feedback
 from somebody using it. Before that: shipping the runner and inbox, and acting on what the
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
+
+**Open / follow-ups (2026-10-15):**
+
+1. `SetVariableTrigger` ignores its "scope" parameter (a pre-existing bug on `main`), so every variable is task-scoped and a later step cannot read an earlier step's variable.
+2. `WorkflowTransaction` retries can reuse a stale change tracker, so a retried attempt may skip a change as "unchanged".
+3. Actor and lookup values show raw keys when a trigger is reopened in the builder.
+4. There is no way to delete a never-published draft version.
+5. TRDIS wiring is the next plan.
 
 **Where the session ended (2026-10-06):** `main` clean and pushed, 0 warnings, 490/490 green,
 `0.1.0-preview.8` published. The first host's integration was rebuilt from scratch against a
