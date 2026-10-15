@@ -172,8 +172,11 @@ else
         {
             targets = await Client.GetSubjectFieldsAsync(requested);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception)
         {
+            // Everything, cancellation included: nothing here cancels the load, so a
+            // TaskCanceledException is an HttpClient timeout, and letting it escape a
+            // lifecycle method would end the author's Blazor Server session.
             if (_loadedFor == requested)
             {
                 // Forget this subject type so the next parameter set tries again.
