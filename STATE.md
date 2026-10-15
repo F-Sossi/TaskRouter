@@ -28,6 +28,12 @@ produced. See the git log for the order things happened in.
 3. There is no way to delete a never-published draft version.
 4. `TriggerExecution.Detail` (the field update's change summary) is recorded, but nothing in the library displays it yet; the run log does not show it.
 5. TRDIS wiring is the next plan.
+6. Two forked branches completing at the same moment can both insert the same new run-scoped
+   variable, and the second completion fails on the unique index. Run scope now works, so the
+   demo's `lastInputOutcome` on forked Provide Input is exactly this case; it was hidden while
+   every variable was task-scoped. Retrying the completion succeeds.
+7. The demo's runner showed no complete button for the assignee during the 2026-10-15 browser
+   check; the step was completed through `/documenttasks/complete` instead. Not investigated.
 
 **Where the session ended (2026-10-06):** `main` clean and pushed, 0 warnings, 490/490 green,
 `0.1.0-preview.8` published. The first host's integration was rebuilt from scratch against a
