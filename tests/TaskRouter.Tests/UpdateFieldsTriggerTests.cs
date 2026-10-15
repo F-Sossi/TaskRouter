@@ -147,6 +147,184 @@ public class UpdateFieldsTriggerTests
     }
 
     [TestMethod]
+    public async Task An_abandoned_scope_lets_the_original_error_through_with_its_writes_undone()
+    {
+        var db = _host.Db;
+        var document = await NewChangeRequestAsync();
+
+        await WorkflowTransaction.ExecuteAsync(db, async ct =>
+        {
+            document.Description = "engine wrote this";
+
+            // As under LogAndContinue: the trigger's error is caught and the workflow carries on.
+            var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+            {
+                var scope = await FieldWriteScope.BeginAsync(db, ct);
+                try
+                {
+                    document.Comments = "saved by the host";
+                    await db.SaveChangesAsync(ct);
+                    Refuse();
+                    await scope.SaveAndCompleteAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    await scope.AbandonAsync(ex);
+                    throw;
+                }
+                finally
+                {
+                    await scope.DisposeAsync();
+                }
+            });
+
+            Assert.AreEqual("refused", error.Message);
+            Assert.IsNull(document.Comments);
+            Assert.AreEqual(EntityState.Unchanged, db.Entry(document).State);
+        });
+
+        db.ChangeTracker.Clear();
+        var stored = await db.Documents.AsNoTracking().SingleAsync(d => d.Id == document.Id);
+        Assert.AreEqual("engine wrote this", stored.Description);
+        Assert.IsNull(stored.Comments);
+
+        static void Refuse() => throw new InvalidOperationException("refused");
+    }
+
+    [TestMethod]
+    public async Task A_database_refusal_on_save_is_undone_and_earlier_work_kept()
+    {
+        var db = _host.Db;
+        var document = await NewChangeRequestAsync();
+        var existing = await NewSectionAsync();
+
+        await WorkflowTransaction.ExecuteAsync(db, async ct =>
+        {
+            document.Description = "engine wrote this";
+
+            var scope = await FieldWriteScope.BeginAsync(db, ct);
+            try
+            {
+                document.Comments = "never lands";
+                db.Sections.Add(new Section { Code = existing.Code, Name = "Duplicate" }); // unique index on Code
+                var refusal = await Assert.ThrowsExactlyAsync<DbUpdateException>(() => scope.SaveAndCompleteAsync(ct));
+                await scope.AbandonAsync(refusal);
+            }
+            finally
+            {
+                await scope.DisposeAsync();
+            }
+
+            Assert.IsFalse(db.ChangeTracker.HasChanges());
+            Assert.IsNull(document.Comments);
+        });
+
+        db.ChangeTracker.Clear();
+        var stored = await db.Documents.AsNoTracking().SingleAsync(d => d.Id == document.Id);
+        Assert.AreEqual("engine wrote this", stored.Description);
+        Assert.IsNull(stored.Comments);
+        Assert.AreEqual(1, await db.Sections.CountAsync(s => s.Code == existing.Code));
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "unsaved")]
+    [DataRow(true, DisplayName = "saved by the host")]
+    public async Task A_new_entity_added_through_a_collection_is_undone(bool hostSaves)
+    {
+        var db = _host.Db;
+        var document = await NewChangeRequestAsync();
+        var section = await NewSectionAsync();
+
+        await WorkflowTransaction.ExecuteAsync(db, async ct =>
+        {
+            await using (var scope = await FieldWriteScope.BeginAsync(db, ct))
+            {
+                document.WorkItems.Add(new WorkItem { DocumentId = document.Id, AssignedSectionId = section.Id });
+                if (hostSaves)
+                {
+                    await db.SaveChangesAsync(ct);
+                }
+            }
+
+            Assert.IsEmpty(document.WorkItems);
+            await db.SaveChangesAsync(ct);
+        });
+
+        db.ChangeTracker.Clear();
+        Assert.IsFalse(await db.WorkItems.AnyAsync(w => w.DocumentId == document.Id));
+    }
+
+    [TestMethod]
+    public async Task An_existing_entity_deleted_and_saved_inside_the_scope_comes_back_tracked()
+    {
+        var db = _host.Db;
+        var section = await NewSectionAsync();
+
+        await WorkflowTransaction.ExecuteAsync(db, async ct =>
+        {
+            await using (var scope = await FieldWriteScope.BeginAsync(db, ct))
+            {
+                db.Sections.Remove(section);
+                await db.SaveChangesAsync(ct);
+            }
+
+            Assert.AreEqual(EntityState.Unchanged, db.Entry(section).State);
+        });
+
+        db.ChangeTracker.Clear();
+        Assert.IsTrue(await db.Sections.AnyAsync(s => s.Id == section.Id));
+    }
+
+    [TestMethod]
+    public async Task An_undo_that_fails_rolls_back_everything_and_reports_both_errors()
+    {
+        // XACT_ABORT makes the server roll back the whole transaction on the error, taking
+        // the savepoint with it, so rolling back to the savepoint must fail.
+        var db = _host.Db;
+        var document = await NewChangeRequestAsync();
+
+        await Assert.ThrowsAsync<Exception>(() => WorkflowTransaction.ExecuteAsync(db, async ct =>
+        {
+            document.Description = "engine wrote this";
+
+            var scope = await FieldWriteScope.BeginAsync(db, ct);
+            InvalidOperationException? failure = null;
+            try
+            {
+                try
+                {
+                    document.Comments = "saved by the host";
+                    await db.SaveChangesAsync(ct);
+                    await db.Database.ExecuteSqlRawAsync("SET XACT_ABORT ON; SELECT 1/0;", ct);
+                }
+                catch (Exception ex)
+                {
+                    failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => scope.AbandonAsync(ex));
+                    StringAssert.StartsWith(failure.Message, ex.Message);
+                    StringAssert.Contains(failure.Message, "so the whole operation was rolled back");
+                    Assert.IsInstanceOfType<AggregateException>(failure.InnerException);
+                }
+            }
+            finally
+            {
+                await scope.DisposeAsync();
+                await scope.DisposeAsync(); // idempotent
+            }
+
+            Assert.IsNotNull(failure);
+
+            // As under LogAndContinue: the workflow carries on and writes more. None of it may land.
+            document.Revision = "Z";
+        }));
+
+        db.ChangeTracker.Clear();
+        var stored = await db.Documents.AsNoTracking().SingleAsync(d => d.Id == document.Id);
+        Assert.IsNull(stored.Description);
+        Assert.IsNull(stored.Comments);
+        Assert.AreEqual("-", stored.Revision);
+    }
+
+    [TestMethod]
     public async Task Describe_names_the_entity_type_and_key()
     {
         var db = _host.Db;
@@ -160,6 +338,14 @@ public class UpdateFieldsTriggerTests
     }
 
     // ───────────────────────────── Fixtures ─────────────────────────────
+
+    private async Task<Section> NewSectionAsync()
+    {
+        var section = new Section { Code = $"S-{Guid.NewGuid():N}"[..10], Name = "Fixture section" };
+        _host.Db.Sections.Add(section);
+        await _host.Db.SaveChangesAsync();
+        return section;
+    }
 
     private async Task<ChangeRequest> NewChangeRequestAsync()
     {
