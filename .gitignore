@@ -34,3 +34,6 @@ appsettings.Development.local.json
 ## OS
 .DS_Store
 Thumbs.db
+
+# Git worktrees for feature branches
+.worktrees/
