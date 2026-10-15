@@ -452,6 +452,48 @@ public class UpdateFieldsTriggerEndToEndTests
             (await _host.Db.Documents.AsNoTracking().SingleAsync(d => d.Id == document.Id)).Comments);
     }
 
+    [TestMethod]
+    public async Task A_field_update_sees_records_added_earlier_in_the_same_event()
+    {
+        // An earlier trigger adds a work item without saving it. The update's scope saves
+        // pending work before the target resolves, so the new item is found and updated too.
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(
+            withTriggers: true,
+            configure: s => s.AddScoped<IWorkflowTrigger, AddWorkItemTrigger>());
+
+        var document = await NewChangeRequestAsync();
+        await AddWorkItemsAsync(document, "C100");
+        var taskId = await StartWithTriggerAsync(document, "allWorkItems", [new("WorkItemState", nameof(WorkItemStatus.InProgress))]);
+
+        var update = await _host.Db.WorkflowTriggerDefinitions.SingleAsync(d => d.TriggerKey == BuiltInTriggerKeys.UpdateFields);
+        update.Order = 1;
+        _host.Db.WorkflowTriggerDefinitions.Add(new TriggerDefinition
+        {
+            TaskDefinitionId = update.TaskDefinitionId,
+            TriggerKey = AddWorkItemTrigger.TriggerKey,
+            Event = WorkflowEventKind.TaskCompleted,
+            Order = 0,
+            FailurePolicy = TriggerFailurePolicy.FailOperation,
+            CreatorId = "system",
+            ModifierId = "system"
+        });
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        _host.Db.ChangeTracker.Clear();
+        var bySection = await _host.Db.WorkItems.AsNoTracking()
+            .Where(w => w.DocumentId == document.Id)
+            .Select(w => new { w.AssignedSection!.Code, w.WorkItemState })
+            .ToDictionaryAsync(w => w.Code, w => w.WorkItemState);
+
+        Assert.HasCount(2, bySection);
+        Assert.AreEqual(WorkItemStatus.InProgress, bySection["C100"], "The work item that already existed.");
+        Assert.AreEqual(WorkItemStatus.InProgress, bySection["C200"], "The work item added earlier in the same event.");
+    }
+
     // ───────────────────────────── Fixtures ─────────────────────────────
 
     /// <summary>
@@ -607,6 +649,27 @@ public class UpdateFieldsTriggerEndToEndTests
             Task.FromResult(operation == WorkflowOperation.UpdateSubjectFields
                 ? WorkflowAuthorizationResult.Denied("fields are frozen")
                 : WorkflowAuthorizationResult.Allowed);
+    }
+
+    /// <summary>Adds a C200 work item to the run's document, and leaves it unsaved.</summary>
+    private sealed class AddWorkItemTrigger(DemoDbContext db) : IWorkflowTrigger
+    {
+        public const string TriggerKey = "test.add-work-item";
+
+        public string Key => TriggerKey;
+
+        public TriggerDescriptor Describe() =>
+            new(Key, "Add work item", "Adds a work item without saving it.", Enum.GetValues<WorkflowEventKind>(), []);
+
+        public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+        {
+            var sectionId = await db.Sections.Where(s => s.Code == "C200").Select(s => s.Id).SingleAsync(ct);
+            db.WorkItems.Add(new WorkItem
+            {
+                DocumentId = int.Parse(context.Subject.SubjectId, System.Globalization.CultureInfo.InvariantCulture),
+                AssignedSectionId = sectionId
+            });
+        }
     }
 
     private sealed class ThrowingFieldsPolicy : IWorkflowAuthorizationPolicy
