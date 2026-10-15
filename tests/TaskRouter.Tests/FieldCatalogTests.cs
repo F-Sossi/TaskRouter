@@ -178,13 +178,79 @@ public class FieldCatalogTests
     }
 
     [TestMethod]
-    public void Options_on_a_field_that_is_not_a_lookup_are_refused()
+    public void Options_on_a_field_that_is_neither_a_lookup_nor_an_actor_are_refused()
     {
         var target = new WorkflowFieldsBuilder().ForSubjectType("ChangeRequest")
             .Target<WorkItem>("w", "W", FieldCardinality.One, NoWorkItems);
 
-        Assert.ThrowsExactly<ArgumentException>(() => target.Field(
+        var error = Assert.ThrowsExactly<ArgumentException>(() => target.Field(
             w => w.WorkItemState, "State", options: (_, _) => Task.FromResult<IReadOnlyList<FieldChoice>>([])));
+        StringAssert.Contains(error.Message, "'WorkItemState' is neither a lookup nor an actor, so it takes no options.");
+    }
+
+    [TestMethod]
+    public void An_actor_field_may_narrow_its_picker_with_options()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("ChangeRequest")
+            .Target<WorkItem>("w", "W", FieldCardinality.One, NoWorkItems)
+            .Field(w => w.CurrentlyAssignedActorId, "Assigned to", FieldKind.Actor,
+                options: (_, _) => Task.FromResult<IReadOnlyList<FieldChoice>>([]));
+
+        Assert.IsTrue(fields.Build().TryGetTarget("ChangeRequest", "w", out var target));
+        Assert.IsNotNull(target.Fields.Single().Options);
+    }
+
+    [TestMethod]
+    public void Keys_other_than_letters_digits_underscores_and_hyphens_are_refused()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("ChangeRequest")
+            .Target<DocumentBase>("this document", "This document", FieldCardinality.One, NoDocuments)
+                .Field(d => d.Comments, "Comments")
+            .Target<WorkItem>("work/items", "Work items", FieldCardinality.Many, NoWorkItems)
+                .Field(w => w.WorkItemState, "State");
+
+        var error = Assert.ThrowsExactly<InvalidOperationException>(() => fields.Build());
+
+        StringAssert.Contains(error.Message, "'this document'");
+        StringAssert.Contains(error.Message, "'work/items'");
+    }
+
+    [TestMethod]
+    public void Keys_may_use_letters_digits_underscores_and_hyphens()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("ChangeRequest")
+            .Target<DocumentBase>("this-document_2", "This document", FieldCardinality.One, NoDocuments)
+                .Field(d => d.Comments, "Comments");
+
+        Assert.HasCount(1, fields.Build().Describe("ChangeRequest"));
+    }
+
+    [TestMethod]
+    public void A_non_nullable_string_needs_a_value()
+    {
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("Drawing")
+            .Target<DocumentBase>("document", "This document", FieldCardinality.One, NoDocuments)
+                .Field(d => d.Title, "Title")
+                .Field(d => d.Comments, "Comments");
+        Assert.IsTrue(fields.Build().TryGetTarget("Drawing", "document", out var target));
+
+        var title = target.Fields.Single(f => f.Key == "Title");
+        var comments = target.Fields.Single(f => f.Key == "Comments");
+        var drawing = new Drawing { Title = "t", DocNumber = "n", Comments = "c" };
+
+        Assert.IsFalse(title.IsNullable);
+        Assert.IsTrue(comments.IsNullable);
+
+        var error = Assert.ThrowsExactly<InvalidOperationException>(
+            () => title.Write(drawing, null, null!, CancellationToken.None).GetAwaiter().GetResult());
+        Assert.AreEqual("'Title' needs a value.", error.Message);
+
+        comments.Write(drawing, null, null!, CancellationToken.None).GetAwaiter().GetResult();
+        Assert.IsNull(drawing.Comments);
     }
 
     [TestMethod]

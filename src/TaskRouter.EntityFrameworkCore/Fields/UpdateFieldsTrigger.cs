@@ -67,8 +67,7 @@ public sealed class UpdateFieldsTrigger(
 
         if (!catalog.TryGetTarget(subjectType, targetKey, out var target))
         {
-            throw new InvalidOperationException(
-                $"This step updates '{targetKey}', which {subjectType} does not have.");
+            throw new InvalidOperationException(UnknownTarget(targetKey, subjectType));
         }
 
         var assignments = FieldAssignments.Parse(context.Config.GetString("assignments"));
@@ -110,7 +109,7 @@ public sealed class UpdateFieldsTrigger(
         var services = context.Services
             ?? throw new InvalidOperationException("Field updates need the trigger's service provider.");
 
-        var write = new FieldWriteContext(context.ActorId, services);
+        var write = new FieldWriteContext(context.ActorId, context.Subject, context.Task, services);
         var changes = new List<string>();
 
         // Not `await using`: the scope must be told why it is being abandoned, so that if the
@@ -165,7 +164,7 @@ public sealed class UpdateFieldsTrigger(
 
                     changes.Add(
                         $"{target.Key} {scope.KeyOf(entity)} {field.Label}: "
-                        + $"{FieldValueConverter.Format(before) ?? "(empty)"} → {FieldValueConverter.Format(value) ?? "(empty)"}");
+                        + $"{Show(field, before)} → {Show(field, value)}");
                 }
 
                 if (changed)
@@ -196,5 +195,28 @@ public sealed class UpdateFieldsTrigger(
         }
 
         context.Report.Detail = changes.Count == 0 ? NothingToChange : string.Join("; ", changes);
+    }
+
+    /// <summary>
+    /// The refusal for a target the subject type does not have. The builder's publish check
+    /// (FIELDS_UNKNOWN_TARGET) says the same, after the task's label.
+    /// </summary>
+    internal static string UnknownTarget(string targetKey, string subjectType) =>
+        $"'{targetKey}' is not something a {subjectType} workflow can update.";
+
+    /// <summary>
+    /// A value as the change summary shows it: a choice by the label the author picked it
+    /// by, falling back to the member name; anything else as <see cref="FieldValueConverter.Format"/> has it.
+    /// </summary>
+    private static string Show(FieldRegistration field, object? value)
+    {
+        var text = FieldValueConverter.Format(value);
+
+        if (text is not null && field.Kind == FieldKind.Choice)
+        {
+            text = field.Choices.FirstOrDefault(c => c.Value == text)?.Label ?? text;
+        }
+
+        return text ?? "(empty)";
     }
 }

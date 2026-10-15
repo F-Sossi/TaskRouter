@@ -6,15 +6,21 @@ using TaskRouter.Core.Model;
 namespace TaskRouter.EntityFrameworkCore.Fields;
 
 /// <summary>What a target's resolver is given to find its records.</summary>
-public sealed class FieldResolveContext(
-    WorkflowSubject subject, WorkflowTaskSnapshot task, IServiceProvider services)
+public sealed class FieldResolveContext
 {
-    public WorkflowSubject Subject { get; } = subject;
+    internal FieldResolveContext(WorkflowSubject subject, WorkflowTaskSnapshot task, IServiceProvider services)
+    {
+        Subject = subject;
+        Task = task;
+        Services = services;
+    }
+
+    public WorkflowSubject Subject { get; }
 
     /// <summary>The task whose event fired the trigger — its branch key finds "this section's" records.</summary>
-    public WorkflowTaskSnapshot Task { get; } = task;
+    public WorkflowTaskSnapshot Task { get; }
 
-    public IServiceProvider Services { get; } = services;
+    public IServiceProvider Services { get; }
 
     /// <summary>
     /// The host's context, as the same instance the engine is writing through. Resolving
@@ -26,25 +32,49 @@ public sealed class FieldResolveContext(
 }
 
 /// <summary>What a field's writer and a target's <c>OnWritten</c> hook are given.</summary>
-public sealed class FieldWriteContext(string actorId, IServiceProvider services)
+public sealed class FieldWriteContext
 {
+    internal FieldWriteContext(
+        string actorId, WorkflowSubject subject, WorkflowTaskSnapshot task, IServiceProvider services)
+    {
+        ActorId = actorId;
+        Subject = subject;
+        Task = task;
+        Services = services;
+    }
+
     /// <summary>Who caused the event. <see cref="WorkflowActors.System"/> for the deadline sweep.</summary>
-    public string ActorId { get; } = actorId;
+    public string ActorId { get; }
 
     public bool IsSystem => ActorId == WorkflowActors.System;
 
-    public IServiceProvider Services { get; } = services;
+    /// <summary>The run's subject: the document the workflow runs against.</summary>
+    public WorkflowSubject Subject { get; }
+
+    /// <summary>
+    /// The task whose event fired the trigger — for a writer that wants its branch key or
+    /// its name, such as a state-machine transition that records why it moved.
+    /// </summary>
+    public WorkflowTaskSnapshot Task { get; }
+
+    public IServiceProvider Services { get; }
 
     public T Service<T>() where T : notnull => Services.GetRequiredService<T>();
 }
 
-/// <summary>What a lookup field's options delegate is given.</summary>
-public sealed class FieldOptionsContext(string? search, IServiceProvider services)
+/// <summary>What a lookup or actor field's options delegate is given.</summary>
+public sealed class FieldOptionsContext
 {
-    /// <summary>What the author has typed so far. Null or empty means "the first few".</summary>
-    public string? Search { get; } = search;
+    internal FieldOptionsContext(string? search, IServiceProvider services)
+    {
+        Search = search;
+        Services = services;
+    }
 
-    public IServiceProvider Services { get; } = services;
+    /// <summary>What the author has typed so far. Null or empty means "the first few".</summary>
+    public string? Search { get; }
+
+    public IServiceProvider Services { get; }
 
     public TContext Db<TContext>() where TContext : class =>
         DbResolver.Resolve<TContext>(Services);

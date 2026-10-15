@@ -178,7 +178,7 @@ internal sealed class FieldWriteScope : IAsyncDisposable
 
             throw new FieldUpdateUndoFailedException(
                 $"{cause?.Message ?? "The field update was abandoned"}; undoing it also failed ({undoError.Message}), "
-                + "so the whole operation was rolled back",
+                + "so the whole operation was rolled back.",
                 cause is null ? undoError : new AggregateException(cause, undoError));
         }
     }

@@ -316,7 +316,7 @@ public class UpdateFieldsTriggerTests
                 {
                     failure = await Assert.ThrowsExactlyAsync<FieldUpdateUndoFailedException>(() => scope.AbandonAsync(ex));
                     StringAssert.StartsWith(failure.Message, ex.Message);
-                    StringAssert.Contains(failure.Message, "so the whole operation was rolled back");
+                    StringAssert.Contains(failure.Message, "so the whole operation was rolled back.");
                     Assert.IsInstanceOfType<AggregateException>(failure.InnerException);
                 }
             }
@@ -439,7 +439,7 @@ public class UpdateFieldsTriggerTests
         Assert.IsTrue(result.IsError);
         var error = result.UnwrapError();
         Assert.IsInstanceOfType<FieldUpdateUndoFailedException>(error, error.ToString());
-        StringAssert.Contains(error.Message, "so the whole operation was rolled back");
+        StringAssert.Contains(error.Message, "so the whole operation was rolled back.");
 
         db.ChangeTracker.Clear();
         var status = await db.WorkflowTasks.AsNoTracking()

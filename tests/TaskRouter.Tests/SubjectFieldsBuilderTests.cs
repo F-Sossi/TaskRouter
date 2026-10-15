@@ -172,6 +172,7 @@ public class SubjectFieldsBuilderTests
         public bool Flag { get; set; }
         public int? OwnerId { get; set; }
         public string? Name { get; set; }
+        public string? ReviewerId { get; set; }
     }
 
     /// <summary>A client over a catalog of its own, for the cases the demo's fields cannot express.</summary>
@@ -183,7 +184,8 @@ public class SubjectFieldsBuilderTests
             .Target<Probe>("probe", "The probe", FieldCardinality.One, _ => Enumerable.Empty<Probe>().AsQueryable())
                 .Field(p => p.Flag, "Flag")
                 .Field(p => p.OwnerId, "Owner", FieldKind.Lookup, options: owners)
-                .Field(p => p.Name, "Name");
+                .Field(p => p.Name, "Name")
+                .Field(p => p.ReviewerId, "Reviewer", FieldKind.Actor, options: owners);
 
         var services = _scope.ServiceProvider;
 
@@ -278,7 +280,8 @@ public class SubjectFieldsBuilderTests
             .FirstAsync();
         var label = (await _client.GetWorkflowAsync(versionId))!.Tasks[0].Label;
 
-        StringAssert.Contains(error.Message, $"'{label}'");
+        Assert.AreEqual(
+            $"'{label}': 'theDocument' is not something a ChangeRequest workflow can update.", error.Message);
     }
 
     [TestMethod]
@@ -317,6 +320,18 @@ public class SubjectFieldsBuilderTests
         var options = await client.SearchFieldOptionsAsync("Probe", "probe", "OwnerId", null);
 
         Assert.IsEmpty(options);
+    }
+
+    [TestMethod]
+    public async Task An_actor_field_with_an_options_delegate_asks_it_rather_than_the_directory()
+    {
+        var client = ClientWith((c, ct) =>
+            Task.FromResult<IReadOnlyList<FieldChoice>>([new FieldChoice("reviewer-1", "The only reviewer")]));
+
+        var options = await client.SearchFieldOptionsAsync("Probe", "probe", "ReviewerId", null);
+
+        Assert.HasCount(1, options);
+        Assert.AreEqual("reviewer-1", options[0].Value);
     }
 
     [TestMethod]

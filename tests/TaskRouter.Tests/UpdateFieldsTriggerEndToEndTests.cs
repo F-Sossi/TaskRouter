@@ -44,7 +44,7 @@ public class UpdateFieldsTriggerEndToEndTests
 
         var execution = await ExecutionAsync();
         Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
-        Assert.AreEqual($"document {document.Id} Status: Scheduled → OnHold", execution.Detail);
+        Assert.AreEqual($"document {document.Id} Status: Scheduled → On Hold", execution.Detail);
     }
 
     [TestMethod]
@@ -277,7 +277,7 @@ public class UpdateFieldsTriggerEndToEndTests
 
         Assert.IsTrue(result.IsError);
         StringAssert.Contains(result.UnwrapError().Message,
-            "This step updates 'nope', which ChangeRequest does not have.");
+            "'nope' is not something a ChangeRequest workflow can update.");
     }
 
     [TestMethod]
@@ -492,6 +492,38 @@ public class UpdateFieldsTriggerEndToEndTests
         Assert.HasCount(2, bySection);
         Assert.AreEqual(WorkItemStatus.InProgress, bySection["C100"], "The work item that already existed.");
         Assert.AreEqual(WorkItemStatus.InProgress, bySection["C200"], "The work item added earlier in the same event.");
+    }
+
+    [TestMethod]
+    public async Task A_writer_is_told_the_subject_and_the_task()
+    {
+        var seen = new List<FieldWriteContext>();
+        var fields = new WorkflowFieldsBuilder();
+        fields.ForSubjectType("ChangeRequest")
+            .Target<DocumentBase>("document", "This document", FieldCardinality.One, context =>
+            {
+                var id = int.Parse(context.Subject.SubjectId, System.Globalization.CultureInfo.InvariantCulture);
+                return context.Db<DemoDbContext>().Documents.Where(d => d.Id == id);
+            })
+                .Field(d => d.Comments, "Comments", write: (document, value, context, _) =>
+                {
+                    seen.Add(context);
+                    document.Comments = value;
+                    return Task.CompletedTask;
+                });
+
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, configure: s => s.AddSingleton(fields.Build()));
+
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("Comments", "noted")]);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        var context = seen.Single();
+        Assert.AreEqual("ChangeRequest", context.Subject.SubjectType);
+        Assert.AreEqual(IdOf(document), context.Subject.SubjectId);
+        Assert.AreEqual(taskId, context.Task.Id);
     }
 
     // ───────────────────────────── Fixtures ─────────────────────────────

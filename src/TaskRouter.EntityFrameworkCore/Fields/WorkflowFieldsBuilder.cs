@@ -33,10 +33,28 @@ public sealed class WorkflowFieldsBuilder
     /// <summary>
     /// Composes every declaration into a catalog. Throws one exception naming every
     /// problem, so a host fixes its wiring in one pass rather than one restart per mistake.
+    /// Called by <c>AddWorkflowFields</c>.
     /// </summary>
-    public WorkflowFieldCatalog Build()
+    internal WorkflowFieldCatalog Build()
     {
         var problems = new List<string>();
+
+        // Keys travel in trigger configuration and in the builder's URLs, so they are kept
+        // to characters that need no escaping anywhere. Checked per declaration, so a key
+        // shared by several subject types is reported once.
+        foreach (var declaration in _declarations)
+        {
+            if (!declaration.IsExtension && !IsValidKey(declaration.Key))
+            {
+                problems.Add($"Target key '{declaration.Key}' may only use letters, digits, '_' and '-'.");
+            }
+
+            foreach (var field in declaration.Fields.Where(f => !IsValidKey(f.Key)))
+            {
+                problems.Add($"Field key '{field.Key}' on '{declaration.Key}' may only use letters, digits, '_' and '-'.");
+            }
+        }
+
         var bySubjectType = new Dictionary<string, List<TargetRegistration>>(StringComparer.Ordinal);
 
         foreach (var declaration in _declarations.Where(d => !d.IsExtension))
@@ -102,6 +120,9 @@ public sealed class WorkflowFieldsBuilder
 
         return new WorkflowFieldCatalog(bySubjectType);
     }
+
+    private static bool IsValidKey(string key) =>
+        key.Length > 0 && key.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
 
     private static void AddFields(
         TargetRegistration target, TargetDeclaration declaration, string subjectType, List<string> problems)
@@ -199,7 +220,12 @@ public sealed class TargetFieldsBuilder<T> where T : class
     /// A field an author may set. The key is the property name. The kind is inferred from
     /// the property type; pass <see cref="FieldKind.Actor"/> for a text actor id or
     /// <see cref="FieldKind.Lookup"/> (with <paramref name="options"/>) for a key into
-    /// another table.
+    /// another table. An actor field may take <paramref name="options"/> too, to narrow
+    /// its picker; without them it offers the whole actor directory.
+    ///
+    /// <para>A reference-typed property refuses null unless it is declared nullable
+    /// (<c>string?</c>), so a <c>required string</c> gets a sentence rather than a database
+    /// error.</para>
     ///
     /// <para>Give <paramref name="write"/> for any field guarded by host rules — a status
     /// with a state machine above all. Without it the property is assigned directly.</para>
@@ -241,9 +267,10 @@ public sealed class TargetFieldsBuilder<T> where T : class
                 nameof(kind));
         }
 
-        if (options is not null && effective != FieldKind.Lookup)
+        if (options is not null && effective is not (FieldKind.Lookup or FieldKind.Actor))
         {
-            throw new ArgumentException($"'{info.Name}' is not a lookup, so it takes no options.", nameof(options));
+            throw new ArgumentException(
+                $"'{info.Name}' is neither a lookup nor an actor, so it takes no options.", nameof(options));
         }
 
         if (effective == FieldKind.Lookup && options is null)
@@ -257,7 +284,11 @@ public sealed class TargetFieldsBuilder<T> where T : class
         }
 
         var getter = property.Compile();
-        var isNullable = !valueType.IsValueType || Nullable.GetUnderlyingType(valueType) is not null;
+        var isNullable = valueType.IsValueType
+            ? Nullable.GetUnderlyingType(valueType) is not null
+            // Unknown — a property compiled without nullable annotations — stays nullable, as
+            // it always was: only a property declared non-nullable refuses null.
+            : new NullabilityInfoContext().Create(info).WriteState != NullabilityState.NotNull;
 
         _declaration.Fields.Add(new FieldRegistration
         {

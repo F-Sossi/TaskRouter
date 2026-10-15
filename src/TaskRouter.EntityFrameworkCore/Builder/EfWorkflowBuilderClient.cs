@@ -155,9 +155,10 @@ public sealed class EfWorkflowBuilderClient(
         Task.FromResult(fields?.Describe(subjectType) ?? []);
 
     /// <summary>
-    /// A lookup asks the host's options delegate. An actor field with no delegate of its
-    /// own asks the directory — the same one the reassign picker uses — so a host gets
-    /// actor pickers without writing anything.
+    /// A field with an options delegate asks it: a lookup always has one, and an actor
+    /// field may, to narrow its picker. An actor field without one asks the directory — the
+    /// same one the reassign picker uses — so a host gets actor pickers without writing
+    /// anything.
     ///
     /// <para>The actor fallback loads the host's whole directory and filters it in memory
     /// on every call, so the UI should debounce what the author types.</para>
@@ -443,7 +444,7 @@ public sealed class EfWorkflowBuilderClient(
                 if (!fields.TryGetTarget(model.SubjectType, targetKey, out var target))
                 {
                     errors.Add(new("FIELDS_UNKNOWN_TARGET",
-                        $"'{task.Label}': {model.SubjectType} has no '{targetKey}' to update."));
+                        $"'{task.Label}': {UpdateFieldsTrigger.UnknownTarget(targetKey, model.SubjectType)}"));
                     continue;
                 }
 
