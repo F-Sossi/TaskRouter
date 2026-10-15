@@ -12,7 +12,7 @@
 
 **Scope:** this repository only. The TRDIS wiring (`TrdisWorkflowFields*.cs`, `TransitionToAsync` on its two services) is a follow-up plan against `../Dev`, written once this ships as a preview package.
 
-**Deviation from the spec, deliberate:** the catalog and its builder live in **EntityFrameworkCore**, not Core, because a target's resolver is an `IQueryable<T>` that must be materialised with EF. Core keeps everything that crosses the wire. The demo does not seed a field-update workflow (it would change the trigger counts existing tests assert on); the browser check in Task 13 authors one instead. Two spec checks are dropped as not worth their cost: the startup check that every catalog subject type is in `WorkflowBuilderOptions.SubjectTypes` (the options are configured separately and a mismatch is harmless — the type is simply never offered), and refusing `LogAndContinue` on providers without savepoints (the engine always runs triggers inside `WorkflowTransaction`, and every supported provider has savepoints).
+**Deviation from the spec, deliberate:** the catalog and its builder live in **EntityFrameworkCore**, not Core, because a target's resolver is an `IQueryable<T>` that must be materialised with EF. Core keeps everything that crosses the wire. The demo does not seed a field-update workflow (it would change the trigger counts existing tests assert on); the browser check in Task 13 authors one instead. Two spec checks are dropped as not worth their cost: the startup check that every catalog subject type is in `WorkflowBuilderOptions.SubjectTypes` (the options are configured separately and a mismatch is harmless — the type is simply never offered), and refusing `LogAndContinue` at publish on providers without savepoints. In its place, `FieldWriteScope.BeginAsync` refuses at run time, before writing anything, when the transaction reports no savepoint support — which SQL Server does when `MultipleActiveResultSets=True` (found in Task 5's review; the original claim that every supported provider has savepoints was wrong).
 
 ---
 
@@ -2481,49 +2481,66 @@ public sealed class UpdateFieldsTrigger(
         var write = new FieldWriteContext(context.ActorId, services);
         var changes = new List<string>();
 
-        await using var scope = await FieldWriteScope.BeginAsync(db, ct).ConfigureAwait(false);
+        // Not `await using`: the scope must be told why it is being abandoned, so that if the
+        // undo itself fails its error carries the original refusal rather than replacing it.
+        var scope = await FieldWriteScope.BeginAsync(db, ct).ConfigureAwait(false);
 
-        foreach (var entity in entities)
+        try
         {
-            var changed = false;
-
-            foreach (var (field, value) in planned)
+            foreach (var entity in entities)
             {
-                if (!field.DeclaringType.IsInstanceOfType(entity))
+                var changed = false;
+
+                foreach (var (field, value) in planned)
                 {
-                    throw new InvalidOperationException(
-                        $"'{target.Label}' found a {entity.GetType().Name}, which has no '{field.Key}'. "
-                        + "The host's resolver for this subject type returns the wrong type.");
+                    if (!field.AppliesTo(entity))
+                    {
+                        throw new InvalidOperationException(
+                            $"'{target.Label}' found a {entity.GetType().Name}, which has no '{field.Key}'. "
+                            + "The host's resolver for this subject type returns the wrong type.");
+                    }
+
+                    var before = field.Read(entity);
+
+                    if (Equals(before, value))
+                    {
+                        continue;
+                    }
+
+                    await field.Write(entity, value, write, ct).ConfigureAwait(false);
+                    changed = true;
+
+                    changes.Add(
+                        $"{scope.Describe(entity)} {field.Label}: "
+                        + $"{FieldValueConverter.Format(before) ?? "(empty)"} → {FieldValueConverter.Format(value) ?? "(empty)"}");
                 }
 
-                var before = field.Read(entity);
-
-                if (Equals(before, value))
+                if (changed)
                 {
-                    continue;
+                    foreach (var hook in target.OnWritten.Where(h => h.AppliesTo(entity)))
+                    {
+                        await hook.Run(entity, write, ct).ConfigureAwait(false);
+                    }
                 }
-
-                await field.Write(entity, value, write, ct).ConfigureAwait(false);
-                changed = true;
-
-                changes.Add(
-                    $"{scope.Describe(entity)} {field.Label}: "
-                    + $"{FieldValueConverter.Format(before) ?? "(empty)"} → {FieldValueConverter.Format(value) ?? "(empty)"}");
-
-                // Reported as it goes, so a failure part-way says how far it got.
-                context.Report.Detail = string.Join("; ", changes);
             }
 
-            if (changed)
-            {
-                foreach (var hook in target.OnWritten.Where(h => h.DeclaringType.IsInstanceOfType(entity)))
-                {
-                    await hook.Run(entity, write, ct).ConfigureAwait(false);
-                }
-            }
+            await scope.SaveAndCompleteAsync(ct).ConfigureAwait(false);
         }
+        catch (Exception ex)
+        {
+            // Recorded before the undo, so a failure says how far it got — and that none of it stuck.
+            context.Report.Detail = changes.Count == 0 ? null : "Undone: " + string.Join("; ", changes);
 
-        await scope.SaveAndCompleteAsync(ct).ConfigureAwait(false);
+            // Returns normally when the undo succeeds, so the original refusal is what is rethrown.
+            // Throws a composite (original + undo failure) when it does not, having rolled back
+            // the whole transaction so nothing partial can commit.
+            await scope.AbandonAsync(ex).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            await scope.DisposeAsync().ConfigureAwait(false);
+        }
 
         context.Report.Detail = changes.Count == 0 ? "Nothing to change." : string.Join("; ", changes);
     }
