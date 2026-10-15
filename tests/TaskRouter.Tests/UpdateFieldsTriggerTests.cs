@@ -493,19 +493,6 @@ public class UpdateFieldsTriggerTests
         }
     }
 
-    [TestMethod]
-    public async Task Describe_names_the_entity_type_and_key()
-    {
-        var db = _host.Db;
-        var document = await NewChangeRequestAsync();
-
-        await WorkflowTransaction.ExecuteAsync(db, async ct =>
-        {
-            await using var scope = await FieldWriteScope.BeginAsync(db, ct);
-            Assert.AreEqual($"ChangeRequest {document.Id}", scope.Describe(document));
-        });
-    }
-
     // ───────────────────────────── Fixtures ─────────────────────────────
 
     private async Task<Section> NewSectionAsync()

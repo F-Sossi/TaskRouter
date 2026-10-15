@@ -80,8 +80,9 @@ public static class DemoWorkflowFields
         return Task.CompletedTask;
     }
 
-    // An unparseable id is a subject that is not one of our documents: resolve nothing,
-    // and the update reports there was nothing to change.
+    // An unparseable id is a subject that is not one of our documents, so every target
+    // resolves nothing: the Many target reports there was nothing to change, and the One
+    // targets fail with "found nothing to update".
     private static int DocumentId(WorkflowSubject subject) =>
         int.TryParse(subject.SubjectId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : 0;
 }

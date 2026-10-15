@@ -120,7 +120,7 @@ else
                         default:
                             <MudTextField T="string" Label="Value" Value="row.Value" Dense="true"
                                           Variant="Variant.Outlined"
-                                          HelperText="May use {actor}, {today}, {var:name}"
+                                          HelperText="@(field.Kind == FieldKind.Number ? "A number, or {var:name}" : "May use {actor}, {today}, {var:name}")"
                                           ValueChanged="@(v => SetValueAsync(row, v))" />
                             break;
                     }

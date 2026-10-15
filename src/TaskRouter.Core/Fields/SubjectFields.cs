@@ -11,7 +11,7 @@ public enum FieldKind
     Date,
     /// <summary>An enum. Stored by member name.</summary>
     Choice,
-    /// <summary>An actor id, picked from the host's directory.</summary>
+    /// <summary>An actor id, picked from the host's directory, or from options the host supplies to narrow it.</summary>
     Actor,
     /// <summary>A key into some other host table, picked from options the host supplies.</summary>
     Lookup
@@ -55,9 +55,22 @@ public static class FieldAssignments
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// The value to store in the trigger's <c>assignments</c> parameter: a JSON array of
+    /// <c>{"field": ..., "value": ...}</c> objects, in the order given.
+    /// </summary>
+    /// <param name="assignments">The lines to store. Values are kept as written, tokens included.</param>
     public static string Serialize(IEnumerable<FieldAssignment> assignments) =>
         JsonSerializer.Serialize(assignments, Json);
 
+    /// <summary>
+    /// Reads a stored <c>assignments</c> parameter back into its lines, in stored order.
+    /// </summary>
+    /// <param name="json">The stored value. Null, empty or whitespace means no assignments.</param>
+    /// <returns>The assignments; empty when there are none.</returns>
+    /// <exception cref="FormatException">
+    /// The value is not JSON, or a line is null or names no field.
+    /// </exception>
     public static IReadOnlyList<FieldAssignment> Parse(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))

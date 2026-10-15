@@ -75,9 +75,6 @@ internal sealed class FieldWriteScope : IAsyncDisposable
         return scope;
     }
 
-    /// <summary>A record's identity for the change summary: its CLR type and key values.</summary>
-    public string Describe(object entity) => $"{_db.Entry(entity).Metadata.ClrType.Name} {KeyOf(entity)}";
-
     /// <summary>A record's primary key values, comma-separated; "?" for a keyless type.</summary>
     public string KeyOf(object entity)
     {

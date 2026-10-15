@@ -428,8 +428,15 @@ public sealed class EfWorkflowBuilderClient(
                     continue;
                 }
 
-                // Read the way TriggerConfig reads it: keys without regard to case.
-                var configuration = new Dictionary<string, string?>(trigger.Configuration, StringComparer.OrdinalIgnoreCase);
+                // Read the way TriggerConfig reads it: keys without regard to case. Copied
+                // through the indexer, so keys that differ only by case cannot throw; the
+                // last one wins.
+                var configuration = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var (key, value) in trigger.Configuration)
+                {
+                    configuration[key] = value;
+                }
                 var targetKey = configuration.GetValueOrDefault("target");
 
                 if (string.IsNullOrWhiteSpace(targetKey))

@@ -322,12 +322,14 @@ for some subject types only; `OnWritten` runs once per record that actually chan
 
 - **Kinds** are inferred from the property type: text, number, true/false, ISO date, and an
   enum stored by member name. The only kinds you may state are `FieldKind.Actor` (a string
-  actor id) and `FieldKind.Lookup` (a key into another table, with an `options` delegate
-  that supplies the choices).
+  actor id, picked from the actor directory unless an `options` delegate narrows it) and
+  `FieldKind.Lookup` (a key into another table, with an `options` delegate that supplies
+  the choices). A reference-typed property declared non-nullable (`required string`)
+  refuses an empty value. Target and field keys may use letters, digits, `_` and `-`.
 - **Give a field a `write` delegate** whenever host rules guard it. Throwing refuses the
   write, and the exception's message is what the user sees.
 - **Values** may use `{actor}`, `{now}`, `{today}`, `{today+Nd}` / `{today-Nd}` (up to five
-  digits), `{var:name}` and the existing task tokens. Tokens are not allowed on choice,
+  digits; `{today}` and `{now}` are UTC), `{var:name}` and the existing task tokens. Tokens are not allowed on choice,
   true/false or lookup fields.
 - **All or nothing.** Every assignment on every record succeeds or none does, including
   writes your own code saved. Under *Log and continue* the step still completes, with
@@ -342,7 +344,8 @@ for some subject types only; `OnWritten` runs once per record that actually chan
   deadline sweep) bypasses the check.
 - **The builder validates on publish** (`FIELDS_*` errors) and offers target, field and
   value pickers.
-- **Schema:** this adds `TaskRouterTriggerExecutions.Detail` (nullable). Add a migration.
+- **Schema:** this adds `TaskRouterTriggerExecutions.Detail` (nullable), which is where each
+  update's change summary lands. Add a migration.
 
 ### Ready-made endpoints
 

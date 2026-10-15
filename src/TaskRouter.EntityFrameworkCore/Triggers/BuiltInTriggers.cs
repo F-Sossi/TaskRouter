@@ -216,7 +216,7 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
         [
             new("url", "URL", TriggerParameterKind.Url, Required: true),
             new("body", "JSON body", TriggerParameterKind.Template,
-                HelpText: "Leave blank to send a default event payload."),
+                HelpText: "Leave blank to send a default event payload. Renders the {task.*}, {subject.*} and {event} tokens; {actor}, {now}, {today} and {var:name} are sent as written."),
             new("timeoutSeconds", "Timeout (seconds)", TriggerParameterKind.Integer,
                 DefaultValue: "30")
         ],
@@ -311,8 +311,11 @@ internal static partial class TriggerTemplate
 
         var now = DateTime.UtcNow;
 
-        // One pass: text a token substitutes is never rescanned, so a variable whose value
-        // looks like a token stays as it was written.
+        // Render has already substituted the task and subject tokens, and its output is
+        // what is scanned here. This second step is one pass: text it substitutes (a
+        // variable's value, the actor) is never rescanned, so a variable whose value looks
+        // like a token stays as it was written. A task or subject value that looks like one
+        // of these tokens would still be rendered.
         return ContextToken().Replace(rendered, match =>
         {
             if (match.Groups["actor"].Success)
