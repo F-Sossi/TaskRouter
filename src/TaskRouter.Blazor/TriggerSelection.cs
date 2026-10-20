@@ -1,5 +1,6 @@
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
+using TaskRouter.Core.Model;
 
 namespace TaskRouter.Blazor;
 
@@ -19,7 +20,13 @@ internal static class TriggerSelection
     /// them would be wrong more often than not: a webhook's AfterCommit, carried over to a
     /// field update, leaves a refused write nothing to roll back.</para>
     /// </summary>
-    public static void Apply(TriggerEditModel edit, TriggerDescriptor descriptor)
+    /// <param name="offered">
+    /// The events the builder offers on this step, when it knows them. The event lands on
+    /// one of these — "step is completed" by preference — rather than on the descriptor's
+    /// first event, which may be one that never fires here.
+    /// </param>
+    public static void Apply(
+        TriggerEditModel edit, TriggerDescriptor descriptor, IReadOnlyList<WorkflowEventKind>? offered = null)
     {
         ArgumentNullException.ThrowIfNull(edit);
         ArgumentNullException.ThrowIfNull(descriptor);
@@ -39,9 +46,13 @@ internal static class TriggerSelection
             edit.Configuration.TryAdd(p.Name, p.DefaultValue);
         }
 
-        if (!descriptor.SupportedEvents.Contains(edit.Event) && descriptor.SupportedEvents.Count > 0)
+        var events = offered ?? descriptor.SupportedEvents;
+
+        if (!events.Contains(edit.Event) && events.Count > 0)
         {
-            edit.Event = descriptor.SupportedEvents[0];
+            edit.Event = events.Contains(WorkflowEventKind.TaskCompleted)
+                ? WorkflowEventKind.TaskCompleted
+                : events[0];
         }
     }
 }

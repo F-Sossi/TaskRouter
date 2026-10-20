@@ -25,7 +25,11 @@ public sealed record TriggerDescriptor(
     IReadOnlyList<TriggerParameter> Parameters,
     TriggerDispatchMode DefaultDispatch = TriggerDispatchMode.InTransaction,
     TriggerFailurePolicy DefaultFailurePolicy = TriggerFailurePolicy.LogAndContinue,
-    Type? CustomEditorComponent = null);
+    Type? CustomEditorComponent = null,
+    // Appended, so positional construction elsewhere keeps compiling. Null means every
+    // mode. The builder narrows it to what this host can run: without outbox processing an
+    // after-commit or background trigger is queued and never picked up.
+    IReadOnlyList<TriggerDispatchMode>? DispatchModes = null);
 
 public sealed record TriggerParameter(
     string Name,

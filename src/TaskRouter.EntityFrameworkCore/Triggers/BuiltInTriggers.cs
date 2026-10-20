@@ -30,7 +30,8 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
     public TriggerDescriptor Describe() => new(
         Key,
         "Set Workflow Variable",
-        "Stores a value against the run, readable by later triggers and route conditions.",
+        "Remembers a value on this run of the workflow, such as who approved or a date, so later steps, "
+        + "route conditions and other triggers can read it as {var:name}. Changes nothing on the document.",
         SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
         Parameters:
         [
@@ -77,7 +78,8 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
     public TriggerDescriptor Describe() => new(
         Key,
         "Report Progress",
-        "Calculates completion for the run (or the completing branch) and reports it to the host.",
+        "Works out how far through the workflow the document is, from the steps completed so far, and hands "
+        + "the percentage to the application to store. To set a fixed percentage instead, use Update fields.",
         SupportedEvents:
         [
             WorkflowEventKind.TaskCompleted,
@@ -161,14 +163,15 @@ public sealed class NotifyTrigger : IWorkflowTrigger
     public TriggerDescriptor Describe() => new(
         Key,
         "Send Notification",
-        "Sends a message through the host's notification sink once the transaction commits.",
+        "Sends a notification to the person assigned this step, or to someone you name, once the step's "
+        + "change has been saved.",
         SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
         Parameters:
         [
             new("subject", "Subject", TriggerParameterKind.Text, Required: true),
             new("body", "Body", TriggerParameterKind.Template, Required: true),
             new("recipient", "Recipient actor id", TriggerParameterKind.Text,
-                HelpText: "Leave blank to send to the task's current assignee.")
+                HelpText: "Leave blank to send to whoever is assigned this step.")
         ],
         // After commit, never inline: an email cannot be un-sent if the transaction
         // rolls back.
@@ -210,7 +213,8 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
     public TriggerDescriptor Describe() => new(
         Key,
         "Call Webhook",
-        "POSTs a JSON body to a URL once the transaction commits.",
+        "Posts a JSON message to another system's URL once the step's change has been saved. For "
+        + "integrations: the other system tells you the URL.",
         SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
         Parameters:
         [

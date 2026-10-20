@@ -51,6 +51,15 @@ public sealed class WorkflowBuilderOptions
     /// a host that never translates them has nothing to constrain.</para>
     /// </summary>
     public IReadOnlyList<string> Outcomes { get; set; } = [];
+
+    /// <summary>
+    /// Whether to offer "Custom event" as something a trigger can fire on.
+    ///
+    /// <para>Off by default because nothing built in raises a custom event: only a host's own
+    /// trigger code does, through <c>RaiseEventAsync</c>. Offered to a host that has none, it
+    /// is a trigger that publishes and never runs. Switch it on once such code exists.</para>
+    /// </summary>
+    public bool OfferCustomEvents { get; set; }
 }
 
 /// <summary>

@@ -131,8 +131,52 @@ public sealed class EfWorkflowBuilderClient(
         return new TaskTypeOption(type.Id, type.Key, type.DisplayName);
     }
 
+    /// <summary>
+    /// The registered triggers, narrowed to what this host can actually run: events nothing
+    /// here raises and dispatch modes nothing here drains are left out, so the builder never
+    /// offers an option that saves, publishes and then does nothing.
+    /// </summary>
     public Task<IReadOnlyList<TriggerDescriptor>> GetTriggerDescriptorsAsync(CancellationToken ct = default) =>
-        Task.FromResult(triggers.Descriptors);
+        Task.FromResult<IReadOnlyList<TriggerDescriptor>>([.. triggers.Descriptors.Select(OfferedHere)]);
+
+    private TriggerDescriptor OfferedHere(TriggerDescriptor descriptor)
+    {
+        var modes = (descriptor.DispatchModes ?? Enum.GetValues<TriggerDispatchMode>())
+            .Where(m => DispatchUnavailable(m) is null)
+            .ToList();
+
+        return descriptor with
+        {
+            SupportedEvents = [.. descriptor.SupportedEvents.Where(e => EventUnavailable(e) is null)],
+            DispatchModes = modes,
+            // Notify defaults to after commit; on a host without the outbox that default
+            // would be a notification nobody sends.
+            DefaultDispatch = modes.Contains(descriptor.DefaultDispatch)
+                ? descriptor.DefaultDispatch
+                : TriggerDispatchMode.InTransaction
+        };
+    }
+
+    /// <summary>
+    /// Why this host never raises <paramref name="kind"/>, or null when it does. Without a
+    /// service provider the wiring cannot be inspected, so only the configured option counts.
+    /// </summary>
+    private string? EventUnavailable(WorkflowEventKind kind) => kind switch
+    {
+        WorkflowEventKind.Custom when !options.OfferCustomEvents =>
+            "this application raises no custom events",
+        WorkflowEventKind.TaskDueSoon or WorkflowEventKind.TaskOverdue
+            when services is not null && services.GetService(typeof(WorkflowDeadlineOptions)) is null =>
+            "this application does not run the deadline sweep (AddDeadlineProcessing)",
+        _ => null
+    };
+
+    /// <summary>Why this host never runs a trigger dispatched <paramref name="mode"/>, or null when it does.</summary>
+    private string? DispatchUnavailable(TriggerDispatchMode mode) =>
+        mode is TriggerDispatchMode.AfterCommit or TriggerDispatchMode.Background
+            && services is not null && services.GetService(typeof(WorkflowOutboxOptions)) is null
+            ? "this application does not run the outbox (AddOutboxProcessing), so it would never run"
+            : null;
 
     /// <summary>
     /// The role keys this host's assignment resolver understands, as configured on
@@ -393,8 +437,43 @@ public sealed class EfWorkflowBuilderClient(
         errors.AddRange(StructuralErrors(model));
         errors.AddRange(WorkflowDefinitionValidator.Validate(ToTransientVersion(model)));
         errors.AddRange(FieldErrors(model));
+        errors.AddRange(TriggerEventErrors(model));
 
         return Task.FromResult<IReadOnlyList<ValidationError>>(errors);
+    }
+
+    /// <summary>
+    /// A trigger that can never fire: on an event this host never raises, on an event never
+    /// raised against its step (see <see cref="TriggerEvents.WhyNever"/>), or dispatched in a
+    /// way nothing here drains. Inactive triggers are skipped; they are not meant to fire.
+    /// Blocks publishing, not saving, like <see cref="FieldErrors"/>.
+    /// </summary>
+    private List<ValidationError> TriggerEventErrors(WorkflowEditModel model)
+    {
+        var errors = new List<ValidationError>();
+
+        foreach (var task in model.Tasks)
+        {
+            foreach (var trigger in task.Triggers.Where(t => t.IsActive))
+            {
+                var name = triggers.Descriptors
+                    .FirstOrDefault(d => string.Equals(d.Key, trigger.TriggerKey, StringComparison.OrdinalIgnoreCase))
+                    ?.DisplayName ?? trigger.TriggerKey;
+                var on = $"{name} on '{task.Label}' ({TriggerEvents.Label(trigger.Event)})";
+
+                if ((EventUnavailable(trigger.Event) ?? TriggerEvents.WhyNever(trigger.Event, task, model)) is { } why)
+                {
+                    errors.Add(new("TRIGGER_NEVER_FIRES", $"{on} can never fire: {why}."));
+                }
+
+                if (DispatchUnavailable(trigger.DispatchMode) is { } notRun)
+                {
+                    errors.Add(new("TRIGGER_NEVER_RUNS", $"{on} is set to run {trigger.DispatchMode}, but {notRun}."));
+                }
+            }
+        }
+
+        return errors;
     }
 
     /// <summary>

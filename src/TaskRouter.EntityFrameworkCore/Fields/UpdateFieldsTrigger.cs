@@ -40,7 +40,9 @@ public sealed class UpdateFieldsTrigger(
     public TriggerDescriptor Describe() => new(
         Key,
         "Update fields",
-        "Changes fields on the document this workflow runs against, or on records related to it.",
+        "Sets fields on the document this workflow runs against, or on records related to it such as its "
+        + "work items, to a fixed or calculated value. For example: set the work item's completion to 60 when "
+        + "this step is completed.",
         SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
         Parameters:
         [
