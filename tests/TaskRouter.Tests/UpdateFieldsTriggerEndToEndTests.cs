@@ -225,6 +225,48 @@ public class UpdateFieldsTriggerEndToEndTests
     }
 
     [TestMethod]
+    public async Task A_test_run_writes_nothing_and_says_what_it_would_have_set()
+    {
+        // The builder's test pane: a made-up subject that is no document at all.
+        var taskId = await StartWithTriggerAsync("not-a-document", "document",
+            [new("Status", "OnHold"), new("Comments", "Held by {actor}")],
+            subjectType: "WorkflowTest", isTest: true);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        var execution = await ExecutionAsync();
+        Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
+        Assert.AreEqual(
+            "Test run, nothing written. Would set on 'This document': Status → On Hold; Comments → Held by user-originator",
+            execution.Detail);
+    }
+
+    [TestMethod]
+    public async Task A_test_run_on_a_real_document_leaves_it_alone()
+    {
+        // A test run is hard-deleted afterwards, which could not take a write back.
+        var document = await NewChangeRequestAsync();
+        var taskId = await StartWithTriggerAsync(document, "document", [new("Status", "OnHold")], isTest: true);
+
+        (await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator")).Unwrap();
+
+        Assert.AreEqual(DocumentStatus.Scheduled, await StatusOfAsync(document.Id));
+    }
+
+    [TestMethod]
+    public async Task A_test_run_still_refuses_a_target_the_workflows_document_type_lacks()
+    {
+        var taskId = await StartWithTriggerAsync("not-a-document", "nope", [new("Status", "OnHold")],
+            subjectType: "WorkflowTest", isTest: true);
+
+        var result = await _host.Engine.CompleteTaskAsync(taskId, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.UnwrapError().Message,
+            "'nope' is not something a ChangeRequest workflow can update.");
+    }
+
+    [TestMethod]
     public async Task A_subject_that_is_not_a_document_fails_saying_so()
     {
         var taskId = await StartWithTriggerAsync("999999999", "document", [new("Status", "OnHold")]);
@@ -580,8 +622,9 @@ public class UpdateFieldsTriggerEndToEndTests
         IReadOnlyList<FieldAssignment> assignments,
         TriggerFailurePolicy policy = TriggerFailurePolicy.FailOperation,
         string subjectType = "ChangeRequest",
-        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction) =>
-        StartWithTriggerAsync(IdOf(document), target, assignments, policy, subjectType, dispatch);
+        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction,
+        bool isTest = false) =>
+        StartWithTriggerAsync(IdOf(document), target, assignments, policy, subjectType, dispatch, isTest);
 
     private Task<int> StartWithTriggerAsync(
         string subjectId,
@@ -589,19 +632,21 @@ public class UpdateFieldsTriggerEndToEndTests
         IReadOnlyList<FieldAssignment> assignments,
         TriggerFailurePolicy policy = TriggerFailurePolicy.FailOperation,
         string subjectType = "ChangeRequest",
-        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction) =>
+        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction,
+        bool isTest = false) =>
         StartWithConfigurationAsync(subjectId, new Dictionary<string, string?>
         {
             ["target"] = target,
             ["assignments"] = FieldAssignments.Serialize(assignments)
-        }, policy, subjectType, dispatch);
+        }, policy, subjectType, dispatch, isTest);
 
     private async Task<int> StartWithConfigurationAsync(
         string subjectId,
         Dictionary<string, string?> configuration,
         TriggerFailurePolicy policy = TriggerFailurePolicy.FailOperation,
         string subjectType = "ChangeRequest",
-        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction)
+        TriggerDispatchMode dispatch = TriggerDispatchMode.InTransaction,
+        bool isTest = false)
     {
         var workflowId = await _host.Db.WorkflowDefinitions
             .Where(w => w.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName)
@@ -609,7 +654,22 @@ public class UpdateFieldsTriggerEndToEndTests
             .SingleAsync();
 
         var subject = new WorkflowSubject(subjectType, subjectId);
-        var run = (await _host.Engine.StartRunAsync(subject, workflowId, "user-originator")).Unwrap();
+        WorkflowRunSnapshot run;
+
+        if (isTest)
+        {
+            // As the builder's test pane starts one: on the published version, flagged as a test.
+            var versionId = await _host.Db.WorkflowDefinitionVersions
+                .Where(v => v.WorkflowDefinitionId == workflowId && v.IsPublished && v.IsLatest)
+                .Select(v => v.Id)
+                .SingleAsync();
+            run = (await _host.Engine.StartRunOnVersionAsync(subject, versionId, "user-originator", isTest: true)).Unwrap();
+        }
+        else
+        {
+            run = (await _host.Engine.StartRunAsync(subject, workflowId, "user-originator")).Unwrap();
+        }
+
         var taskId = run.Tasks.Single().Id;
 
         var definitionId = await _host.Db.WorkflowTasks

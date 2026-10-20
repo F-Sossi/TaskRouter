@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 using TaskRouter.Core.Abstractions;
@@ -26,6 +27,12 @@ namespace TaskRouter.EntityFrameworkCore.Fields;
 /// no HTTP request behind it, so it must judge by the context's actor id and not by an
 /// HttpContext; and a failed attempt's "Undone:" detail is not recorded, because the
 /// outbox records only the outcome of a failed attempt.</para>
+///
+/// <para><b>A test run writes nothing.</b> The builder's test pane runs against a made-up
+/// subject with no records behind it, and a test run is hard-deleted afterwards, which
+/// could not take back a write to a real one. So on a test run the configuration is
+/// checked against the subject type the workflow is published for, the values are
+/// rendered, and the execution reports what would have been set.</para>
 /// </summary>
 public sealed class UpdateFieldsTrigger(
     WorkflowFieldCatalog catalog,
@@ -59,7 +66,17 @@ public sealed class UpdateFieldsTrigger(
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var subjectType = context.Subject.SubjectType;
+        var subjectType = context.Run.IsTest
+            ? await PublishedForAsync(context.Run.WorkflowDefinitionVersionId, ct).ConfigureAwait(false)
+            : context.Subject.SubjectType;
+
+        if (subjectType is null)
+        {
+            context.Report.Detail = "Test run, nothing written. This workflow is not tied to one kind of "
+                + "document, so there is nothing to check its field updates against.";
+            return;
+        }
+
         var targetKey = context.Config.GetString("target");
 
         if (string.IsNullOrWhiteSpace(targetKey))
@@ -95,6 +112,13 @@ public sealed class UpdateFieldsTrigger(
             }
 
             planned.Add((field, value));
+        }
+
+        if (context.Run.IsTest)
+        {
+            context.Report.Detail = $"Test run, nothing written. Would set on '{target.Label}': "
+                + string.Join("; ", planned.Select(p => $"{p.Field.Label} → {Show(p.Field, p.Value)}"));
+            return;
         }
 
         await WorkflowAuthorization.EnsureAllowedAsync(
@@ -198,6 +222,13 @@ public sealed class UpdateFieldsTrigger(
 
         context.Report.Detail = changes.Count == 0 ? NothingToChange : string.Join("; ", changes);
     }
+
+    /// <summary>The subject type a test run's workflow version is published for; null means any.</summary>
+    private Task<string?> PublishedForAsync(int versionId, CancellationToken ct) =>
+        db.WorkflowDefinitionVersions
+            .Where(v => v.Id == versionId)
+            .Select(v => v.SubjectType)
+            .SingleOrDefaultAsync(ct);
 
     /// <summary>
     /// The refusal for a target the subject type does not have. The builder's publish check
