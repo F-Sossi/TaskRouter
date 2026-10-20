@@ -164,6 +164,32 @@ public class TriggerOfferTests
     }
 
     [TestMethod]
+    public async Task Notifying_the_next_steps_assignee_is_refused_on_anything_but_completion()
+    {
+        var client = Client(RunsEverything);
+        var model = await SeededAsync(client);
+        var entry = model.Tasks.Single(t => t.LocalId == model.EntryTaskLocalId);
+
+        var trigger = new TriggerEditModel
+        {
+            TriggerKey = BuiltInTriggerKeys.Notify,
+            Event = WorkflowEventKind.TaskCreated,
+            DispatchMode = TriggerDispatchMode.AfterCommit,
+            Configuration = { ["sendTo"] = "nextAssignee", ["subject"] = "s", ["body"] = "b" }
+        };
+        entry.Triggers.Add(trigger);
+
+        var errors = await client.ValidateAsync(model);
+        Assert.IsTrue(errors.Any(e => e.Code == "TRIGGER_CHOICE_EVENT"
+                && e.Message.Contains("\"Send to: Person assigned the next step\" only works on \"Step is completed\"")),
+            string.Join("; ", errors.Select(e => e.Message)));
+
+        trigger.Event = WorkflowEventKind.TaskCompleted;
+        errors = await client.ValidateAsync(model);
+        Assert.IsFalse(errors.Any(e => e.Code == "TRIGGER_CHOICE_EVENT"));
+    }
+
+    [TestMethod]
     public void Which_events_can_fire_follows_the_steps_shape()
     {
         var first = new TaskEditModel { TaskTypeKey = "first" };

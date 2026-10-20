@@ -124,6 +124,10 @@ internal static class BuilderEndpoints
             [FromServices] IWorkflowBuilderClient client, CancellationToken ct) =>
             Results.Ok(await client.SearchFieldOptionsAsync(subjectType, target, field, q, ct).ConfigureAwait(false)));
 
+        builder.MapGet("/people", async (
+            string? q, [FromServices] IWorkflowBuilderClient client, CancellationToken ct) =>
+            Results.Ok(await client.SearchActorsAsync(q, ct).ConfigureAwait(false)));
+
         builder.MapGet("/route-conditions", async (
             [FromServices] IWorkflowBuilderClient client, CancellationToken ct) =>
             Results.Ok(await client.GetRouteConditionsAsync(ct).ConfigureAwait(false)));

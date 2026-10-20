@@ -95,6 +95,13 @@ public interface IWorkflowBuilderClient
         string subjectType, string target, string field, string? search, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<FieldChoice>>([]);
 
+    /// <summary>
+    /// People from the host's directory whose name or id contains <paramref name="search"/>,
+    /// for a trigger's person picker. Empty when the host has no directory.
+    /// </summary>
+    Task<IReadOnlyList<ActorOption>> SearchActorsAsync(string? search, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ActorOption>>([]);
+
     /// <summary>Route condition keys the host has registered.</summary>
     Task<IReadOnlyList<string>> GetRouteConditionsAsync(CancellationToken ct = default);
 

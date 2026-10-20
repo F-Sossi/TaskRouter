@@ -38,7 +38,56 @@ public sealed record TriggerParameter(
     bool Required = false,
     string? DefaultValue = null,
     IReadOnlyList<string>? Choices = null,
-    string? HelpText = null);
+    string? HelpText = null,
+    // Appended, so positional construction elsewhere keeps compiling.
+    IReadOnlyList<TriggerChoice>? Options = null,
+    TriggerParameterCondition? ShownWhen = null)
+{
+    /// <summary>
+    /// The values a <see cref="TriggerParameterKind.Choice"/> accepts: <see cref="Options"/>
+    /// when given, which carry a label and description each, otherwise <see cref="Choices"/>.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedValues => Options?.Select(o => o.Value).ToList() ?? Choices;
+
+    /// <summary>
+    /// Whether this parameter applies, given the rest of the configuration. One that does
+    /// not is neither shown nor checked: "Recipient" is only asked for when "Send to" is
+    /// "A specific person".
+    /// </summary>
+    public bool AppliesTo(IReadOnlyDictionary<string, string?> configuration, IReadOnlyList<TriggerParameter> siblings)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(siblings);
+
+        if (ShownWhen is null)
+        {
+            return true;
+        }
+
+        var value = configuration.TryGetValue(ShownWhen.Parameter, out var set) && !string.IsNullOrWhiteSpace(set)
+            ? set
+            : siblings.FirstOrDefault(s => s.Name == ShownWhen.Parameter)?.DefaultValue;
+
+        return string.Equals(value, ShownWhen.Value, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>One choice of a <see cref="TriggerParameterKind.Choice"/> parameter.</summary>
+/// <param name="Value">What is stored.</param>
+/// <param name="Label">What the author picks it by.</param>
+/// <param name="Description">A sentence saying what it means; shown under the label.</param>
+/// <param name="Events">
+/// The only events the choice works on, or null for any. The builder offers it only on those,
+/// and refuses to publish a trigger that picked it on another.
+/// </param>
+public sealed record TriggerChoice(
+    string Value,
+    string Label,
+    string? Description = null,
+    IReadOnlyList<WorkflowEventKind>? Events = null);
+
+/// <summary>A parameter applies only while <paramref name="Parameter"/> is set to <paramref name="Value"/>.</summary>
+public sealed record TriggerParameterCondition(string Parameter, string Value);
 
 /// <summary>Typed access to a trigger's stored JSON configuration.</summary>
 public interface ITriggerConfig

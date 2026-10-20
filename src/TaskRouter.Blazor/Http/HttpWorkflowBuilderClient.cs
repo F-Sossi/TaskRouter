@@ -117,6 +117,10 @@ public sealed class HttpWorkflowBuilderClient(HttpClient http, string prefix = "
             + $"/{Uri.EscapeDataString(field)}/options?q={Uri.EscapeDataString(search ?? string.Empty)}", ct)
             .ConfigureAwait(false);
 
+    public async Task<IReadOnlyList<ActorOption>> SearchActorsAsync(string? search, CancellationToken ct = default) =>
+        await GetAsync<List<ActorOption>>($"{_root}/people?q={Uri.EscapeDataString(search ?? string.Empty)}", ct)
+            .ConfigureAwait(false);
+
     public async Task<IReadOnlyList<string>> GetRouteConditionsAsync(CancellationToken ct = default) =>
         await GetAsync<List<string>>($"{_root}/route-conditions", ct).ConfigureAwait(false);
 

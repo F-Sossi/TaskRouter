@@ -238,13 +238,7 @@ public sealed class EfWorkflowBuilderClient(
                 return [];
             }
 
-            var people = await directory.GetActorsAsync(ct).ConfigureAwait(false);
-
-            return [.. people
-                .Where(a => search is null
-                    || a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || a.ActorId.Contains(search, StringComparison.OrdinalIgnoreCase))
-                .Take(MaxOptions)
+            return [.. (await PeopleAsync(directory, search, ct).ConfigureAwait(false))
                 .Select(a => new FieldChoice(a.ActorId, a.DisplayName))];
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -255,6 +249,41 @@ public sealed class EfWorkflowBuilderClient(
 
             return [];
         }
+    }
+
+    /// <summary>
+    /// The directory, narrowed by <paramref name="search"/>. Never an error, for the same
+    /// reason as <see cref="SearchFieldOptionsAsync"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<ActorOption>> SearchActorsAsync(string? search, CancellationToken ct = default)
+    {
+        if (services?.GetService(typeof(IWorkflowActorResolver)) is not IWorkflowActorResolver directory)
+        {
+            return [];
+        }
+
+        try
+        {
+            return await PeopleAsync(directory, string.IsNullOrWhiteSpace(search) ? null : search.Trim(), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Could not search the directory for people; offering none.");
+            return [];
+        }
+    }
+
+    private static async Task<IReadOnlyList<ActorOption>> PeopleAsync(
+        IWorkflowActorResolver directory, string? search, CancellationToken ct)
+    {
+        var people = await directory.GetActorsAsync(ct).ConfigureAwait(false);
+
+        return [.. people
+            .Where(a => search is null
+                || a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || a.ActorId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Take(MaxOptions)];
     }
 
     public async Task<IReadOnlyList<OutcomeTypeOption>> GetOutcomeTypesAsync(
@@ -470,10 +499,46 @@ public sealed class EfWorkflowBuilderClient(
                 {
                     errors.Add(new("TRIGGER_NEVER_RUNS", $"{on} is set to run {trigger.DispatchMode}, but {notRun}."));
                 }
+
+                if (ChoiceOffEvent(trigger) is { } offEvent)
+                {
+                    errors.Add(new("TRIGGER_CHOICE_EVENT", $"{on}: {offEvent}"));
+                }
             }
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// A choice picked on an event it does not work on: "Person assigned the next step" on
+    /// anything but a completion has no next step to look at.
+    /// </summary>
+    private string? ChoiceOffEvent(TriggerEditModel trigger)
+    {
+        var descriptor = triggers.Descriptors
+            .FirstOrDefault(d => string.Equals(d.Key, trigger.TriggerKey, StringComparison.OrdinalIgnoreCase));
+
+        foreach (var parameter in descriptor?.Parameters ?? [])
+        {
+            if (parameter.Options is null || !parameter.AppliesTo(trigger.Configuration, descriptor!.Parameters))
+            {
+                continue;
+            }
+
+            var value = trigger.Configuration.TryGetValue(parameter.Name, out var set) && !string.IsNullOrWhiteSpace(set)
+                ? set
+                : parameter.DefaultValue;
+            var choice = parameter.Options.FirstOrDefault(o => string.Equals(o.Value, value, StringComparison.OrdinalIgnoreCase));
+
+            if (choice?.Events is { } events && !events.Contains(trigger.Event))
+            {
+                return $"\"{parameter.Label}: {choice.Label}\" only works on "
+                    + string.Join(" or ", events.Select(e => $"\"{TriggerEvents.Label(e)}\"")) + ".";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -152,7 +152,9 @@ public enum TriggerParameterKind
     /// <summary>A target from the host's field catalog for the workflow's subject type.</summary>
     FieldTarget,
     /// <summary>A JSON list of field assignments against the configured target.</summary>
-    FieldAssignments
+    FieldAssignments,
+    /// <summary>A person, by actor id, picked from the host's directory.</summary>
+    Actor
 }
 
 public enum VariableType

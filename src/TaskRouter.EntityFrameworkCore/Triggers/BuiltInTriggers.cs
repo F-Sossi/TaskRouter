@@ -155,56 +155,6 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
     }
 }
 
-/// <summary>Hands a message to the host's notification sink, after commit.</summary>
-public sealed class NotifyTrigger : IWorkflowTrigger
-{
-    public string Key => BuiltInTriggerKeys.Notify;
-
-    public TriggerDescriptor Describe() => new(
-        Key,
-        "Send Notification",
-        "Sends a notification to the person assigned this step, or to someone you name, once the step's "
-        + "change has been saved.",
-        SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
-        Parameters:
-        [
-            new("subject", "Subject", TriggerParameterKind.Text, Required: true),
-            new("body", "Body", TriggerParameterKind.Template, Required: true),
-            new("recipient", "Recipient actor id", TriggerParameterKind.Text,
-                HelpText: "Leave blank to send to whoever is assigned this step.")
-        ],
-        // After commit, never inline: an email cannot be un-sent if the transaction
-        // rolls back.
-        DefaultDispatch: TriggerDispatchMode.AfterCommit);
-
-    public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        var sink = context.Services?.GetService<IWorkflowNotificationSink>();
-        if (sink is null)
-        {
-            return;
-        }
-
-        var recipient = context.Config.GetString("recipient") ?? context.Task.AssignedToActorId;
-
-        var subject = await TriggerTemplate.RenderAsync(context.Config.GetString("subject"), context, ct)
-            .ConfigureAwait(false);
-        var body = await TriggerTemplate.RenderAsync(context.Config.GetString("body"), context, ct)
-            .ConfigureAwait(false);
-
-        await sink.SendAsync(new WorkflowNotification(
-            context.Subject,
-            context.Task.Id,
-            recipient,
-            subject ?? string.Empty,
-            body ?? string.Empty,
-            context.ActorId), ct)
-            .ConfigureAwait(false);
-    }
-}
-
 /// <summary>POSTs a JSON body to a URL, after commit.</summary>
 public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null) : IWorkflowTrigger
 {

@@ -119,7 +119,19 @@ public sealed class TriggerConfig : ITriggerConfig
 
         foreach (var p in descriptor.Parameters)
         {
+            if (!p.AppliesTo(config.All, descriptor.Parameters))
+            {
+                continue;
+            }
+
             var raw = config.GetString(p.Name);
+
+            // A default counts as an answer: a trigger saved before the parameter existed
+            // takes it, as does an author who never touched the field.
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                raw = p.DefaultValue;
+            }
 
             if (p.Required && string.IsNullOrWhiteSpace(raw))
             {
@@ -144,8 +156,9 @@ public sealed class TriggerConfig : ITriggerConfig
                     errors.Add($"'{p.Label}' must be true or false.");
                     break;
                 case TriggerParameterKind.Choice
-                    when p.Choices is not null && !p.Choices.Contains(raw, StringComparer.OrdinalIgnoreCase):
-                    errors.Add($"'{p.Label}' must be one of: {string.Join(", ", p.Choices)}.");
+                    when p.AllowedValues is { } allowed && !allowed.Contains(raw, StringComparer.OrdinalIgnoreCase):
+                    errors.Add($"'{p.Label}' must be one of: "
+                        + string.Join(", ", p.Options?.Select(o => o.Label) ?? allowed) + ".");
                     break;
                 case TriggerParameterKind.Url
                     when !Uri.TryCreate(raw, UriKind.Absolute, out _):
