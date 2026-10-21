@@ -178,6 +178,10 @@ public class CompletionPreviewTests
         {
             ["sendTo"] = "nextAssignee", ["subject"] = "Rework", ["body"] = "b"
         });
+        await AddTriggerAsync(convergence, BuiltInTriggerKeys.Notify, WorkflowEventKind.TaskCompleted, new()
+        {
+            ["sendTo"] = "starter", ["subject"] = "Signed off", ["body"] = "b"
+        });
 
         var rejecting = (await _host.Engine.GetSelectiveRejectionPreviewAsync(
             convergence, "rejected", ["C100"], "user-division-head")).Unwrap();
@@ -188,8 +192,10 @@ public class CompletionPreviewTests
                 && a.Description.Contains("\"Rework\"", StringComparison.Ordinal)),
             string.Join(" | ", rejecting.Select(a => $"{a.Step}/{a.When}: {a.Description}")));
 
-        // A straight approval routes on without raising "completed" on the convergence step.
-        Assert.IsFalse(approving.Any(a => a.Step == "PM Review" && a.When == "Step is completed"),
+        // A straight approval finishes the convergence step like an ordinary completion,
+        // so its "completed" triggers run. It used to route on without raising them.
+        Assert.IsTrue(approving.Any(a => a.Step == "PM Review" && a.When == "Step is completed"
+                && a.Description.Contains("\"Signed off\"", StringComparison.Ordinal)),
             string.Join(" | ", approving.Select(a => $"{a.Step}/{a.When}: {a.Description}")));
         Assert.IsFalse(approving.Any(a => a.When == "Some branches are sent back"));
     }

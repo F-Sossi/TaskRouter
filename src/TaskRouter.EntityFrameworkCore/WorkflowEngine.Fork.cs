@@ -192,19 +192,14 @@ public sealed partial class WorkflowEngine
 
             if (rejectedBranchKeys.Count == 0)
             {
-                // Straight approval. Handled here rather than delegating to
-                // CompleteTaskAsync, which refuses rework outcomes on convergence tasks
-                // and would produce advice the caller cannot act on (the original engine's finding M5).
-                task.Status = WorkflowTaskStatus.Completed;
-                task.OutcomeKey = outcomeKey;
-                task.CompletedDate = now;
-                task.Notes = notes ?? task.Notes;
-                task.ModifierId = actorId;
-                task.Modified = now;
-
-                Log(task.Id, "Completed", $"Outcome: {outcomeKey}; no branches rejected.", actorId, now);
-                await RouteFromAsync(task, outcomeKey, actorId, now, token).ConfigureAwait(false);
-                await MaybeCompleteRunAsync(task.WorkflowRunId, actorId, now, token).ConfigureAwait(false);
+                // Straight approval. Not delegated to CompleteTaskAsync, which refuses rework
+                // outcomes on convergence tasks and would produce advice the caller cannot act
+                // on (the original engine's finding M5) -- but finished exactly as it would
+                // finish one. This used to complete the task inline, and so raised no
+                // "completed" triggers, credited nobody, and left a sub-workflow ending here
+                // running with its parent blocked.
+                await FinishAsync(task, outcomeKey, actorId, notes, automatically: false, token)
+                    .ConfigureAwait(false);
                 return;
             }
 

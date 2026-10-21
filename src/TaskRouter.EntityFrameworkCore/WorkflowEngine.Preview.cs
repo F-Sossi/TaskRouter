@@ -74,8 +74,8 @@ public sealed partial class WorkflowEngine
 
     /// <summary>
     /// <see cref="GetCompletionPreviewAsync"/> for <see cref="CompleteWithSelectiveRejectionAsync"/>,
-    /// which takes a different path: with no branch rejected it routes on without raising
-    /// "completed"; with some it raises "branches sent back" and "completed" on the
+    /// which takes a different path: with no branch rejected it finishes like an ordinary
+    /// completion; with some it raises "branches sent back" and "completed" on the
     /// convergence step and creates one rework step per rejected branch, assigned to whoever
     /// worked that branch.
     /// </summary>
@@ -107,19 +107,29 @@ public sealed partial class WorkflowEngine
 
             var now = DateTime.UtcNow;
 
-            // Selective rejection does not hand the task to whoever completes it.
+            if (rejectedBranchKeys.Count == 0)
+            {
+                // Straight approval finishes the step as an ordinary completion does: credited
+                // to whoever completes it, "completed" raised, then the steps it routes to.
+                task.AssignedToActorId = actorId;
+                task.Status = WorkflowTaskStatus.Completed;
+                task.OutcomeKey = outcomeKey;
+                task.CompletedDate = now;
+
+                var onward = await NextStepsAsync(task, outcomeKey, now, ct).ConfigureAwait(false);
+                var approval = new TriggerPreview([.. onward.Select(n => n.Task.ToSnapshot())]);
+                var approved = new List<PlannedAction>();
+
+                approved.AddRange(await dispatcher.PreviewAsync(
+                    task, WorkflowEventKind.TaskCompleted, actorId, approval, null, ct).ConfigureAwait(false));
+                approved.AddRange(await NextStepActionsAsync(onward, actorId, approval, ct).ConfigureAwait(false));
+                return approved;
+            }
+
+            // Sending branches back does not hand the task to whoever completes it.
             task.Status = WorkflowTaskStatus.Completed;
             task.OutcomeKey = outcomeKey;
             task.CompletedDate = now;
-
-            if (rejectedBranchKeys.Count == 0)
-            {
-                // Straight approval: routes on, and raises nothing on the step itself.
-                var onward = await NextStepsAsync(task, outcomeKey, now, ct).ConfigureAwait(false);
-                return await NextStepActionsAsync(
-                    onward, actorId, new TriggerPreview([.. onward.Select(n => n.Task.ToSnapshot())]), ct)
-                    .ConfigureAwait(false);
-            }
 
             var reworkDefinition = await ReworkDefinitionAsync(task, outcomeKey, ct).ConfigureAwait(false);
 

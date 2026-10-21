@@ -359,7 +359,11 @@ public sealed partial class WorkflowEngine(
 
             if (isConvergenceRoute)
             {
-                await HandleConvergenceAsync(task, route, actorId, now, ct).ConfigureAwait(false);
+                await HandleConvergenceAsync(
+                    task,
+                    route.NextTaskDefinition
+                        ?? throw new InvalidOperationException($"Route {route.Id} has no target definition."),
+                    actorId, now, ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -403,9 +407,15 @@ public sealed partial class WorkflowEngine(
         }
     }
 
+    /// <summary>
+    /// Creates the convergence step if <paramref name="task"/> was the last thing open in its
+    /// fork. Reached from a branch completing onto the convergence route, and from a fork task
+    /// being cancelled: a branch that will never complete must not leave the fork waiting for
+    /// it, or the run finishes with nothing open and never converges.
+    /// </summary>
     private async Task HandleConvergenceAsync(
         WorkflowTask task,
-        TaskRoute route,
+        WorkflowTaskDefinition convergenceDef,
         string actorId,
         DateTime now,
         CancellationToken ct)
@@ -425,7 +435,8 @@ public sealed partial class WorkflowEngine(
         if (pending > 0)
         {
             Log(task.Id, "AwaitingConvergence",
-                $"Branch complete. Waiting for {pending} other branch(es).", actorId, now);
+                $"Branch {(task.Status == WorkflowTaskStatus.Cancelled ? "cancelled" : "complete")}. "
+                + $"Waiting for {pending} other branch(es).", actorId, now);
             return;
         }
 
@@ -452,8 +463,6 @@ public sealed partial class WorkflowEngine(
             .FirstOrDefaultAsync(t => t.Id == manifest.OriginTaskId, ct).ConfigureAwait(false);
 
         var source = originTask ?? task;
-        var convergenceDef = route.NextTaskDefinition
-            ?? throw new InvalidOperationException($"Route {route.Id} has no target definition.");
 
         // The convergence task is mainline again -- the fork ends there -- so a
         // pre-assignment on it applies.

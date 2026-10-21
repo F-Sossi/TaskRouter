@@ -10,7 +10,7 @@ Temporal orchestrate *code*, this routes work between *people*.
 
 > Status: the engine core, persistence, the HTTP endpoints, the builder and runner
 > UI — in process and over HTTP — the trigger runtime, deadlines and escalation all
-> exist and pass 742 integration tests against SQL Server. Timers are the one roadmap
+> exist and pass 752 integration tests against SQL Server. Timers are the one roadmap
 > item left — see [Roadmap](#roadmap). Still a preview: what stands between it and 1.0,
 > including known defects, is in [`docs/1.0-readiness.md`](docs/1.0-readiness.md).
 

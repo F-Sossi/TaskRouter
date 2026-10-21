@@ -1,7 +1,8 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-21**: a full review ahead of 1.0 — every finding, and the order to fix them in, is in
+context. Last updated **2026-10-21**: `0.1.0-preview.15` — the three defects the pre-1.0 review confirmed are fixed, and Send
+Notification can be saved with any "Send to". Before that, the same day: a full review ahead of 1.0 — every finding, and the order to fix them in, is in
 [`docs/1.0-readiness.md`](docs/1.0-readiness.md); start there. Before that, **2026-10-20**: `0.1.0-preview.14`, merged to `main` as `a0a23d1` and published — triggers that do what they say: Update fields, plain-language events and actions with an info button, notifications sent to a role, and a confirmation listing what a completion will do. It has breaking changes; see its entry below. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
 reached, and nothing can be added under one. Before that, **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
 the validator and finishable in the runner. Before that, `0.1.0-preview.11` — people and org units are picked by
@@ -54,6 +55,42 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### `0.1.0-preview.15` — what the review confirmed, fixed, 2026-10-21
+
+The three defects [`docs/1.0-readiness.md`](docs/1.0-readiness.md) confirmed against SQL Server
+(A1–A3), and a builder bug that made Send Notification unsaveable. No schema change, no new
+validator rule, no API removed.
+
+#### Before you take this version
+
+1. **Cancelling the last open branch of a fork now converges it.** It used to end the run as
+   Completed with no convergence step. A run that was relying on that — cancelling the
+   remaining branch to finish a workflow early — now gets its convergence step instead, as it
+   would have had the branch been completed. Every branch cancelled still converges; the
+   convergence step is where somebody decides what an empty fork means. To end a run, cancel
+   the run.
+2. **"Complete" on a convergence step with no branch sent back** now finishes the step like any
+   completion: its "Step is completed" triggers run, it is credited to whoever completed it, a
+   sub-workflow ending there closes, and the confirmation lists those actions. Before, none of
+   that happened.
+3. **Idempotency keys of repeatable events gain a suffix.** `TaskAssigned`,
+   `SubWorkflowCompleted`, `SubWorkflowCancelled` and `Custom` can happen to one task more than
+   once, and the second occurrence used to fail the whole operation on the unique index — a step
+   with a "Step is assigned" trigger could not be reassigned twice. Their key is now
+   `definition:task:event:<guid>`. Other events keep `definition:task:event`. A host that
+   parses the key, rather than comparing it, needs to know.
+
+#### What it fixes in the builder
+
+4. **Send Notification saves with any "Send to".** The trigger dialog checked every required
+   parameter on Save, shown or not, so anything but "A specific person" was refused for want of
+   a person. It now checks what the server checks. Changing "Send to" away from a specific
+   person clears the person, so switching back starts empty. A trigger saved before "Send to"
+   existed opens as "A specific person" with its person, which is what it has always sent to;
+   it used to open as "Person assigned this step" with the person hidden.
+
+752 tests, all passing. The test project's two analyzer warnings are fixed.
 
 ### `0.1.0-preview.14` — triggers that do what they say, 2026-10-20
 

@@ -207,6 +207,71 @@ public class ForkConvergenceTests
 
         var reloaded = await _host.Db.WorkflowTasks.SingleAsync(t => t.Id == convergence.Id);
         Assert.AreEqual(WorkflowTaskStatus.Completed, reloaded.Status);
+
+        // Finished as any completion is: credited to whoever completed it, and routed on.
+        Assert.AreEqual("user-division-head", reloaded.AssignedToActorId);
+        Assert.IsTrue(await _host.Db.WorkflowTasks.Include(t => t.TaskDefinition)
+            .AnyAsync(t => t.WorkflowRunId == runId && t.TaskDefinition!.DisplayName == "Close Document"));
+    }
+
+    /// <summary>
+    /// Convergence used to be checked only when a branch completed. Cancelling the last open
+    /// branch left nothing open, so the run was marked Completed and the convergence step was
+    /// never created.
+    /// </summary>
+    [TestMethod]
+    public async Task Cancelling_the_last_open_branch_converges_the_fork()
+    {
+        var runId = await StartRunAndReachProvideInputAsync();
+        var provideInput = await OpenTaskAsync(runId, "Provide Input");
+
+        var fork = (await _host.Engine.ForkTaskAsync(
+            provideInput.Id, ["C100", "C200"], _pmReviewDefId, "user-originator")).Unwrap();
+
+        (await _host.Engine.CompleteTaskAsync(
+            fork.Branches[0].Id, DemoWorkflowSeeder.Outcomes.Approved, "system")).Unwrap();
+        (await _host.Engine.CancelTaskAsync(fork.Branches[1].Id, "user-originator", "not needed")).Unwrap();
+
+        var convergence = await _host.Db.WorkflowTasks
+            .SingleAsync(t => t.WorkflowRunId == runId && t.ForkManifestId != null);
+        var run = await _host.Db.WorkflowRuns.SingleAsync(r => r.Id == runId);
+
+        Assert.AreEqual(_pmReviewDefId, convergence.TaskDefinitionId);
+        Assert.AreEqual(WorkflowTaskStatus.NotStarted, convergence.Status);
+        Assert.AreEqual(WorkflowRunStatus.Running, run.Status);
+    }
+
+    [TestMethod]
+    public async Task A_fork_with_every_branch_cancelled_still_converges()
+    {
+        var runId = await StartRunAndReachProvideInputAsync();
+        var provideInput = await OpenTaskAsync(runId, "Provide Input");
+
+        var fork = (await _host.Engine.ForkTaskAsync(
+            provideInput.Id, ["C100", "C200"], _pmReviewDefId, "user-originator")).Unwrap();
+
+        foreach (var branch in fork.Branches)
+        {
+            (await _host.Engine.CancelTaskAsync(branch.Id, "user-originator")).Unwrap();
+        }
+
+        Assert.AreEqual(1, await _host.Db.WorkflowTasks
+            .CountAsync(t => t.WorkflowRunId == runId && t.ForkManifestId != null));
+    }
+
+    [TestMethod]
+    public async Task Cancelling_a_branch_while_others_are_open_does_not_converge()
+    {
+        var runId = await StartRunAndReachProvideInputAsync();
+        var provideInput = await OpenTaskAsync(runId, "Provide Input");
+
+        var fork = (await _host.Engine.ForkTaskAsync(
+            provideInput.Id, ["C100", "C200", "C300"], _pmReviewDefId, "user-originator")).Unwrap();
+
+        (await _host.Engine.CancelTaskAsync(fork.Branches[0].Id, "user-originator")).Unwrap();
+
+        Assert.IsFalse(await _host.Db.WorkflowTasks
+            .AnyAsync(t => t.WorkflowRunId == runId && t.ForkManifestId != null));
     }
 
     [TestMethod]

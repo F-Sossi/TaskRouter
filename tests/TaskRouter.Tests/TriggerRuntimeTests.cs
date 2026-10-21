@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using DemoDocuments.Server.Domain;
 using DemoDocuments.Server.Workflow;
 
+using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Model;
 using TaskRouter.EntityFrameworkCore;
 using TaskRouter.EntityFrameworkCore.Triggers;
@@ -93,6 +94,92 @@ public class TriggerRuntimeTests
         Assert.HasCount(1, executions);
         Assert.AreEqual(TriggerExecutionStatus.Succeeded, executions[0].Status,
             executions[0].Error);
+    }
+
+    /// <summary>
+    /// A step can be reassigned more than once. Its trigger's idempotency key used to be
+    /// trigger, task and event only, so the second reassignment collided with the first on
+    /// the unique index and failed outright — in the transaction and in the outbox alike.
+    /// </summary>
+    [TestMethod]
+    [DataRow(TriggerDispatchMode.InTransaction)]
+    [DataRow(TriggerDispatchMode.AfterCommit)]
+    public async Task A_step_can_be_reassigned_twice_with_a_trigger_on_reassignment(TriggerDispatchMode mode)
+    {
+        var (_, entryTaskId) = await StartAsync();
+        var definitionId = await _host.Db.WorkflowTasks
+            .Where(t => t.Id == entryTaskId).Select(t => t.TaskDefinitionId).SingleAsync();
+
+        await AddSetVariableAsync(definitionId, WorkflowEventKind.TaskAssigned, mode);
+
+        (await _host.Engine.ReassignTaskAsync(
+            entryTaskId, new WorkflowAssignment("user-a", null), "user-originator")).Unwrap();
+        _host.Db.ChangeTracker.Clear();
+        (await _host.Engine.ReassignTaskAsync(
+            entryTaskId, new WorkflowAssignment("user-b", null), "user-originator")).Unwrap();
+
+        var fired = mode == TriggerDispatchMode.InTransaction
+            ? await _host.Db.WorkflowTriggerExecutions.CountAsync(
+                e => e.TaskId == entryTaskId && e.Event == WorkflowEventKind.TaskAssigned)
+            : await _host.Db.WorkflowOutbox.CountAsync(
+                m => m.TaskId == entryTaskId && m.Event == WorkflowEventKind.TaskAssigned);
+
+        Assert.AreEqual(2, fired);
+    }
+
+    /// <summary>
+    /// Approving a convergence step without sending a branch back used to complete it
+    /// inline, raising no "completed" triggers at all.
+    /// </summary>
+    [TestMethod]
+    public async Task Approving_a_convergence_step_runs_its_completed_triggers()
+    {
+        var (runId, entryTaskId) = await StartAsync();
+        (await _host.Engine.CompleteTaskAsync(entryTaskId, "approved", "user-originator")).Unwrap();
+
+        var provideInput = await _host.Db.WorkflowTasks
+            .Where(t => t.WorkflowRunId == runId && t.Status == WorkflowTaskStatus.NotStarted)
+            .Select(t => t.Id).FirstAsync();
+        var pmReviewDefId = await _host.Db.WorkflowTaskDefinitions
+            .Where(d => d.DisplayName == "PM Review").Select(d => d.Id).SingleAsync();
+
+        var fork = (await _host.Engine.ForkTaskAsync(
+            provideInput, ["C100", "C200"], pmReviewDefId, "user-originator")).Unwrap();
+
+        foreach (var branch in fork.Branches)
+        {
+            (await _host.Engine.CompleteTaskAsync(branch.Id, "approved", "user-originator")).Unwrap();
+        }
+
+        await AddSetVariableAsync(pmReviewDefId, WorkflowEventKind.TaskCompleted, TriggerDispatchMode.InTransaction);
+
+        var convergence = await _host.Db.WorkflowTasks
+            .Where(t => t.WorkflowRunId == runId && t.ForkManifestId != null).Select(t => t.Id).SingleAsync();
+
+        (await _host.Engine.CompleteWithSelectiveRejectionAsync(
+            convergence, "approved", [], "user-division-head")).Unwrap();
+
+        var variable = await _host.Db.WorkflowVariables.AsNoTracking()
+            .SingleOrDefaultAsync(v => v.WorkflowRunId == runId && v.Name == "probe");
+
+        Assert.AreEqual("yes", variable?.Value);
+    }
+
+    private async Task AddSetVariableAsync(int definitionId, WorkflowEventKind on, TriggerDispatchMode mode)
+    {
+        _host.Db.WorkflowTriggerDefinitions.Add(new TriggerDefinition
+        {
+            TaskDefinitionId = definitionId,
+            TriggerKey = BuiltInTriggerKeys.SetVariable,
+            Event = on,
+            DispatchMode = mode,
+            Configuration = """{"name":"probe","value":"yes"}""",
+            CreatorId = "system",
+            ModifierId = "system"
+        });
+
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
     }
 
     [TestMethod]

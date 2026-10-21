@@ -215,8 +215,28 @@ public sealed class TriggerDispatcher(
         postCommit.Add(ct => jobQueue.EnqueueAsync(job, ct));
     }
 
+    /// <summary>
+    /// Identifies one firing of one trigger, for the unique indexes on executions and the
+    /// outbox and for the outbox processor to find its execution again.
+    ///
+    /// <para>Most events happen to a task once, and their key is deterministic so a second
+    /// dispatch of the same firing is refused. <see cref="RepeatableEvents"/> can happen to the
+    /// same task again — reassigned twice, a second sub-workflow ending, a custom event raised
+    /// twice — and a deterministic key made the second occurrence fail the whole operation on
+    /// the unique index. Those get a key of their own per occurrence.</para>
+    /// </summary>
     internal static string IdempotencyKey(int definitionId, int taskId, WorkflowEventKind e) =>
-        $"{definitionId}:{taskId}:{e}";
+        RepeatableEvents.Contains(e)
+            ? $"{definitionId}:{taskId}:{e}:{Guid.NewGuid():N}"
+            : $"{definitionId}:{taskId}:{e}";
+
+    private static readonly HashSet<WorkflowEventKind> RepeatableEvents =
+    [
+        WorkflowEventKind.TaskAssigned,
+        WorkflowEventKind.SubWorkflowCompleted,
+        WorkflowEventKind.SubWorkflowCancelled,
+        WorkflowEventKind.Custom
+    ];
 
     private bool ShouldRun(TriggerDefinition definition, WorkflowTriggerContext context)
     {

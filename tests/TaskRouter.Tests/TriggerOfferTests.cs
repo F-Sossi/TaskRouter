@@ -85,7 +85,7 @@ public class TriggerOfferTests
     {
         var notify = Notify(await Client(RunsEverything).GetTriggerDescriptorsAsync());
 
-        Assert.AreEqual(3, notify.DispatchModes!.Count);
+        Assert.HasCount(3, notify.DispatchModes!);
         Assert.AreEqual(TriggerDispatchMode.AfterCommit, notify.DefaultDispatch);
     }
 
@@ -199,7 +199,7 @@ public class TriggerOfferTests
 
         foreach (var d in descriptors.Where(d => d.Key.StartsWith("workflow.", StringComparison.Ordinal)))
         {
-            Assert.IsTrue(d.Help?.Any(h => h.Heading == "What it does" && h.Points.Count > 0) == true,
+            Assert.IsTrue(d.Help?.Any(h => h.Heading == "What it does" && h.Points.Count > 0) ?? false,
                 $"{d.DisplayName} has no help");
         }
 

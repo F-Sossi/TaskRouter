@@ -48,6 +48,20 @@ public sealed partial class WorkflowEngine
             await FireAsync(task, WorkflowEventKind.TaskCancelled, actorId, ct: token)
                 .ConfigureAwait(false);
 
+            // A cancelled branch is as finished as a completed one, so it may be what the fork
+            // was waiting on. Every branch cancelled still converges: the convergence step is
+            // where somebody decides what an empty fork means, not something to skip.
+            // Before the instance check below: a fork inside a sub-workflow is not over
+            // until its convergence step is.
+            if (task is { ForkGroupId: not null, IsForkOrigin: false, ConvergenceTaskDefinitionId: { } convergenceId })
+            {
+                var convergenceDef = await db.WorkflowTaskDefinitions
+                    .Include(d => d.TaskType)
+                    .SingleAsync(d => d.Id == convergenceId, token).ConfigureAwait(false);
+
+                await HandleConvergenceAsync(task, convergenceDef, actorId, now, token).ConfigureAwait(false);
+            }
+
             // The instance may itself have been the last open thing in its own parent.
             if (task.SubWorkflowInstanceId is { } cancelledInstanceId)
             {
