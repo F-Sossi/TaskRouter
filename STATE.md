@@ -1,7 +1,7 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-15**: field-update triggers, on branch `field-triggers` — not yet merged or versioned. A host declares which fields a workflow may set with `.AddWorkflowFields(...)`; the builder then offers an Update fields trigger (`workflow.updateFields`) with target, field and value pickers, validated at publish. Writes are all-or-nothing, checked as the acting user (`WorkflowOperation.UpdateSubjectFields`), and need database savepoints. The one schema change is `TaskRouterTriggerExecutions.Detail` (nullable), so hosts must add a migration. Also fixed along the way: variables set by an earlier trigger on the same event are now visible to later ones; setting a variable twice on one event updates it instead of adding a duplicate row; variable names match case-insensitively in memory, while database lookups follow the column's collation; the engine and the trigger share one authorization helper; and `SetVariableTrigger` now honours its "scope" parameter (a pre-existing bug on `main`: every variable was written task-scoped, so a later step's `{var:x}` or route condition never saw it) — "run", the default, writes run-scoped and "task" task-scoped. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
+context. Last updated **2026-10-20**: `0.1.0-preview.14`, branch `field-triggers`, not yet merged or published — triggers that do what they say: Update fields, plain-language events and actions with an info button, notifications sent to a role, and a confirmation listing what a completion will do. It has breaking changes; see its entry below. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
 reached, and nothing can be added under one. Before that, **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
 the validator and finishable in the runner. Before that, `0.1.0-preview.11` — people and org units are picked by
 typing rather than scrolling. Before that, **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
@@ -50,6 +50,88 @@ nuget.org read-only 503, and by the time that could be retried the tag pointed a
 older than the fixes worth shipping — so the work went out as `preview.3` rather than
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
+
+### `0.1.0-preview.14` — triggers that do what they say, 2026-10-20
+
+Branch `field-triggers`. Written against the first host's request: "when step A is completed,
+set the work item's completion to 60%", and "every trigger option in the dropdown must work and
+say what it does". Still a preview; the breaking changes are listed first.
+
+#### Before you take this version
+
+1. **Migration: `TaskRouterTriggerExecutions.Detail`** (nvarchar(max), null). Every trigger
+   execution now records what it did, or why it did nothing.
+2. **Publishing from the builder refuses triggers that could never run.** New errors, on active
+   triggers only, from the builder's validate and publish — not from
+   `WorkflowPublishing.PublishWithEntryTaskAsync`, so a seeder is unaffected:
+   - `TRIGGER_NEVER_FIRES` — an event never raised against that step ("Workflow starts" on a
+     step other than the first; a fork event on a step that is not forkable; a convergence event
+     off a convergence point; a sub-workflow event with nothing attached; "nearly due" with no
+     reminder lead time), or one this host never raises.
+   - `TRIGGER_NEVER_RUNS` — **After commit or Background on a host without
+     `AddOutboxProcessing()`.** Those were queued and never sent; Send Notification and Call
+     Webhook default to After commit, so **a host without the outbox will find its existing
+     notifications refused the next time the workflow is published.** Register the outbox (and
+     `AddHttpClient()` for webhooks), or set those triggers to In transaction.
+   - `TRIGGER_CHOICE_EVENT` — a choice limited to some events picked on another: Send to
+     "Person assigned the next step" on anything but "Step is completed".
+   - `FIELDS_*` (nine codes, `FIELDS_UNKNOWN_TARGET` to `FIELDS_BAD_VALUE`) — a field update
+     whose target, fields or values the host does not declare or cannot convert.
+3. **The builder offers less.** Dispatch modes nothing drains are left out (After commit and
+   Background need the outbox); "nearly due" and "overdue" need `AddDeadlineProcessing()`;
+   "Custom event" needs `WorkflowBuilderOptions.OfferCustomEvents = true`, because nothing built
+   in raises one. On a step, only events that can fire there are offered.
+4. **Send Notification: `recipient` became "Send to".** A choice of the person assigned this
+   step (the default), the person assigned the next step, whoever started the workflow, whoever
+   acted, or a specific person picked from the directory. A configuration saved before still
+   runs as it did — a recipient id goes to that person, blank to the assignee — but the dialog
+   shows an old one with a recipient id as "Person assigned this step" until it is re-picked.
+   An execution that reaches nobody records "No one to notify: …" rather than the host's sink
+   dropping it.
+5. **The runner asks before completing a step whose completion sets anything off**, listing
+   each action in plain words; a step without automation completes in one click as before.
+6. **A test run's field updates write nothing.** They are checked against the subject type the
+   workflow is published for and the execution says what would have been set. Notifications
+   and webhooks in a test run are still sent.
+7. **A parameter's default now satisfies `Required`,** so a configuration saved before a
+   parameter existed still validates.
+8. **Field updates need database savepoints.** SQL Server turns them off when the connection
+   string has `MultipleActiveResultSets=True`, and the trigger then refuses to run.
+
+Source and binary compatible otherwise: interface additions have default implementations
+(`IWorkflowTrigger.DescribeActionAsync`, `IWorkflowBuilderClient.SearchActorsAsync`,
+`IWorkflowRunnerClient.GetCompletionActionsAsync`, `IWorkflowEngine.GetCompletionPreviewAsync`,
+`IWorkflowTriggerDispatcher.PreviewAsync`), record parameters are appended, and
+`TriggerParameterKind.Actor` is appended. A host implementing `IWorkflowRunnerClient` itself gets
+an empty preview, so its runner simply does not ask. Two endpoints join the host's existing
+groups and their policy: `GET builder/people?q=` and
+`GET runner/tasks/{id}/completion-actions?outcome=`.
+
+#### What it adds
+
+1. **Update fields (`workflow.updateFields`).** A host declares with `.AddWorkflowFields(...)`
+   which records and fields a workflow may set; the builder offers target, field and value
+   pickers. All-or-nothing, checked as the acting user (`WorkflowOperation.UpdateSubjectFields`),
+   with `OnWritten` hooks for what a change rolls up into. Records exactly what changed.
+2. **Plain-language events and actions.** Every event has a name and a sentence ("Step is
+   completed"); every action describes itself in the dropdown, and an info button opens its full
+   help — what it does, its settings, its catches, then what every trigger shares. A host adds
+   its own sections per action with `WorkflowBuilderOptions.TriggerHelp`.
+3. **Send to**, with a person picker for "A specific person" (`TriggerParameterKind.Actor`).
+   Parameters can carry labelled choices with descriptions, limited to some events
+   (`TriggerChoice`), and be shown only when another has a given value (`ShownWhen`).
+4. **The completion preview.** `IWorkflowEngine.GetCompletionPreviewAsync` walks the path a
+   completion would take — routes and their conditions, a convergence only for the last branch,
+   who each new step would go to — without writing, and each trigger says what it would do:
+   "Set Completion % → 60 on work item for this task's section", "Notify Chen, Jay: …".
+
+Also fixed on the branch: variables set by an earlier trigger on the same event are visible to
+later ones; setting a variable twice on one event updates it; variable names match
+case-insensitively in memory; and `SetVariableTrigger` honours "scope" (on `main` every variable
+was written task-scoped, so a later step's `{var:x}` never saw it).
+
+Verified against the first host on a local pack: its five suites green, and every workflow in
+its development database re-validated — none refused by the new rules.
 
 ### `0.1.0-preview.13` — the last step closes itself, 2026-10-14
 
