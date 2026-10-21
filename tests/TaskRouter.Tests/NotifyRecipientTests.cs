@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 
 using DemoDocuments.Server.Domain;
@@ -127,6 +128,17 @@ public class NotifyRecipientTests
     }
 
     [TestMethod]
+    public async Task Send_to_is_read_ignoring_case_as_validation_reads_it()
+    {
+        var entry = await StartWithNotifyAsync(WorkflowEventKind.TaskCompleted,
+            """{"sendTo":"Person","recipient":"user-lead-c200"}""");
+
+        (await _host.Engine.CompleteTaskAsync(entry, "approved", "user-originator")).Unwrap();
+
+        Assert.AreEqual("user-lead-c200", Delivered().Single().RecipientActorId);
+    }
+
+    [TestMethod]
     public async Task A_trigger_saved_before_send_to_existed_still_reaches_its_recipient()
     {
         var entry = await StartWithNotifyAsync(WorkflowEventKind.TaskCompleted, """{"recipient":"user-lead-c200"}""");
@@ -159,6 +171,55 @@ public class NotifyRecipientTests
         Assert.IsTrue(person.AppliesTo(new Dictionary<string, string?> { ["sendTo"] = "person" }, parameters));
     }
 
+    [TestMethod]
+    public async Task A_notification_that_reaches_some_people_succeeds_rather_than_being_retried_to_them_again()
+    {
+        // Two next steps, and a sink that refuses one of their assignees. Failing would have the
+        // outbox retry the whole trigger, and the person already told would be told again.
+        await _host.DisposeAsync();
+        var sink = new RefusingSink("user-division-head");
+        _host = await TestHost.CreateAsync(withTriggers: true,
+            configure: s => s.AddSingleton<IWorkflowNotificationSink>(sink));
+        _workflowId = await _host.Db.WorkflowDefinitions
+            .Where(w => w.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName)
+            .Select(w => w.Id)
+            .SingleAsync();
+        await AlsoRouteEnterRecordToPmReviewAsync();
+
+        // In an org unit, so the two steps' roles resolve to two different people.
+        var entry = await StartWithNotifyAsync(WorkflowEventKind.TaskCompleted, """{"sendTo":"nextAssignee"}""", "C100");
+        (await _host.Engine.CompleteTaskAsync(entry, "approved", "user-originator")).Unwrap();
+
+        var assignees = await _host.Db.WorkflowTasks.AsNoTracking()
+            .Where(t => t.Id != entry && t.Status == WorkflowTaskStatus.NotStarted)
+            .Select(t => t.AssignedToActorId).ToListAsync();
+        CollectionAssert.Contains(assignees, "user-division-head", string.Join(", ", assignees));
+
+        var execution = await ExecutionAsync();
+        Assert.AreEqual(TriggerExecutionStatus.Succeeded, execution.Status, execution.Error);
+        Assert.HasCount(1, sink.Delivered);
+        StringAssert.Contains(execution.Detail, "Could not notify ");
+        StringAssert.Contains(execution.Detail, "user-division-head");
+    }
+
+    [TestMethod]
+    public async Task A_notification_that_reaches_nobody_fails_so_it_is_retried()
+    {
+        await _host.DisposeAsync();
+        var sink = new RefusingSink("user-originator");
+        _host = await TestHost.CreateAsync(withTriggers: true,
+            configure: s => s.AddSingleton<IWorkflowNotificationSink>(sink));
+        _workflowId = await _host.Db.WorkflowDefinitions
+            .Where(w => w.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName)
+            .Select(w => w.Id)
+            .SingleAsync();
+
+        var entry = await StartWithNotifyAsync(WorkflowEventKind.TaskCompleted, """{"sendTo":"starter"}""");
+        (await _host.Engine.CompleteTaskAsync(entry, "approved", "user-lead-c100")).Unwrap();
+
+        Assert.AreEqual(TriggerExecutionStatus.Failed, (await ExecutionAsync()).Status);
+    }
+
     // ───────────────────────────── Fixtures ─────────────────────────────
 
     /// <summary>
@@ -166,10 +227,11 @@ public class NotifyRecipientTests
     /// transaction rather than after commit, so what it did is recorded by the time the
     /// operation returns.
     /// </summary>
-    private async Task<int> StartWithNotifyAsync(WorkflowEventKind on, string recipientJson)
+    private async Task<int> StartWithNotifyAsync(WorkflowEventKind on, string recipientJson, string? orgUnit = null)
     {
         var subject = new WorkflowSubject(nameof(DemoDocumentType.ChangeRequest), Guid.NewGuid().ToString());
-        var run = (await _host.Engine.StartRunAsync(subject, _workflowId, "user-originator")).Unwrap();
+        var run = (await _host.Engine.StartRunAsync(subject, _workflowId, "user-originator",
+            orgUnit is null ? null : new WorkflowAssignment(null, orgUnit))).Unwrap();
         var entry = run.Tasks.Single();
 
         // Merge the recipient settings with a subject and body.
@@ -199,6 +261,48 @@ public class NotifyRecipientTests
         await _host.Db.WorkflowTaskDefinitions
             .Where(d => d.DisplayName == "Provide Input")
             .ExecuteUpdateAsync(s => s.SetProperty(d => d.AssignmentRoleKey, (string?)null));
+    }
+
+    /// <summary>A second "approved" route out of Enter Record, so completing it creates two steps.</summary>
+    private async Task AlsoRouteEnterRecordToPmReviewAsync()
+    {
+        var existing = await _host.Db.WorkflowTaskRoutes.AsNoTracking()
+            .FirstAsync(r => r.TaskDefinition!.DisplayName == "Enter Record"
+                          && r.NextTaskDefinition!.DisplayName == "Provide Input");
+        var pmReview = await _host.Db.WorkflowTaskDefinitions
+            .Where(d => d.DisplayName == "PM Review" && d.WorkflowDefinitionVersionId
+                == _host.Db.WorkflowTaskDefinitions.Where(e => e.Id == existing.TaskDefinitionId)
+                    .Select(e => e.WorkflowDefinitionVersionId).First())
+            .Select(d => d.Id)
+            .SingleAsync();
+
+        _host.Db.WorkflowTaskRoutes.Add(new TaskRoute
+        {
+            TaskDefinitionId = existing.TaskDefinitionId,
+            TaskOutcomeDefinitionId = existing.TaskOutcomeDefinitionId,
+            NextTaskDefinitionId = pmReview,
+            CreatorId = "seed",
+            ModifierId = "seed"
+        });
+        await _host.Db.SaveChangesAsync();
+        _host.Db.ChangeTracker.Clear();
+    }
+
+    /// <summary>Delivers to everybody but one person, for whom it throws.</summary>
+    private sealed class RefusingSink(string refused) : IWorkflowNotificationSink
+    {
+        public List<WorkflowNotification> Delivered { get; } = [];
+
+        public Task SendAsync(WorkflowNotification notification, CancellationToken ct = default)
+        {
+            if (notification.RecipientActorId == refused)
+            {
+                throw new InvalidOperationException("mailbox full");
+            }
+
+            Delivered.Add(notification);
+            return Task.CompletedTask;
+        }
     }
 
     private IReadOnlyList<WorkflowNotification> Delivered() =>

@@ -552,6 +552,10 @@ public sealed class EfWorkflowBuilderClient(
     ///
     /// <para>Lookup values are not checked: whether key 12 exists is a question about data,
     /// and is answered when the trigger runs.</para>
+    ///
+    /// <para>Inactive triggers are skipped, as in <see cref="TriggerEventErrors"/>: one switched
+    /// off can never run, and switching a half-finished one off is how an author publishes the
+    /// rest of the workflow.</para>
     /// </summary>
     private List<ValidationError> FieldErrors(WorkflowEditModel model)
     {
@@ -559,8 +563,8 @@ public sealed class EfWorkflowBuilderClient(
 
         foreach (var task in model.Tasks)
         {
-            foreach (var trigger in task.Triggers.Where(t =>
-                string.Equals(t.TriggerKey, BuiltInTriggerKeys.UpdateFields, StringComparison.OrdinalIgnoreCase)))
+            foreach (var trigger in task.Triggers.Where(t => t.IsActive
+                && string.Equals(t.TriggerKey, BuiltInTriggerKeys.UpdateFields, StringComparison.OrdinalIgnoreCase)))
             {
                 if (fields is null)
                 {

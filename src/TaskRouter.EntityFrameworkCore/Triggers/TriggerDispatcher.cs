@@ -36,6 +36,7 @@ public interface IWorkflowTriggerDispatcher
         WorkflowEventKind eventKind,
         string actorId,
         TriggerPreview preview,
+        BranchContext? branch = null,
         CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PlannedAction>>([]);
 }
@@ -120,6 +121,7 @@ public sealed class TriggerDispatcher(
         WorkflowEventKind eventKind,
         string actorId,
         TriggerPreview preview,
+        BranchContext? branch = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
@@ -138,7 +140,9 @@ public sealed class TriggerDispatcher(
             return [];
         }
 
-        var context = await BuildContextAsync(task, eventKind, actorId, null, null, ct, preview).ConfigureAwait(false);
+        // The same branch context the real dispatch is given, so a condition or token that
+        // reads the branch answers alike.
+        var context = await BuildContextAsync(task, eventKind, actorId, null, branch, ct, preview).ConfigureAwait(false);
         var step = task.TaskDefinition?.DisplayName ?? context.Task.DisplayName;
         var actions = new List<PlannedAction>();
 

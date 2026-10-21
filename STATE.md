@@ -97,15 +97,30 @@ say what it does". Still a preview; the breaking changes are listed first.
    parameter existed still validates.
 8. **Field updates need database savepoints.** SQL Server turns them off when the connection
    string has `MultipleActiveResultSets=True`, and the trigger then refuses to run.
+9. **Set Workflow Variable now writes run-wide by default.** Its "scope" parameter always
+   defaulted to "run", but `main` ignored it and wrote every variable against the task. Now it
+   is honoured, so **an existing workflow that sets a variable without choosing a scope starts
+   writing one run-wide value**: later steps and route conditions see it (the fix), and fork
+   branches setting the same name now overwrite each other (last branch wins). Set "scope" to
+   "task" where each branch needs its own value.
+10. **Variable names match case-insensitively in memory; database lookups follow the column's
+    collation**, so on a case-sensitive collation (PostgreSQL's default) "Approver" and
+    "approver" can still be two rows. SQL Server's default collation is case-insensitive.
+11. **A notification that reaches some people but not others succeeds**, recording "Could not
+    notify …" for the rest: failing would have the outbox retry the whole trigger and tell the
+    others again. One that reaches nobody still fails and is retried.
 
 Source and binary compatible otherwise: interface additions have default implementations
 (`IWorkflowTrigger.DescribeActionAsync`, `IWorkflowBuilderClient.SearchActorsAsync`,
 `IWorkflowRunnerClient.GetCompletionActionsAsync`, `IWorkflowEngine.GetCompletionPreviewAsync`,
 `IWorkflowTriggerDispatcher.PreviewAsync`), record parameters are appended, and
 `TriggerParameterKind.Actor` is appended. A host implementing `IWorkflowRunnerClient` itself gets
-an empty preview, so its runner simply does not ask. Two endpoints join the host's existing
-groups and their policy: `GET builder/people?q=` and
-`GET runner/tasks/{id}/completion-actions?outcome=`.
+an empty preview, so its runner simply does not ask. Three endpoints join the host's existing
+groups and their policy: `GET builder/people?q=`,
+`GET runner/tasks/{id}/completion-actions?outcome=` and
+`GET runner/tasks/{id}/selective-rejection-actions?outcome=&branch=`. The two previews are
+authorized as the completion they describe: an actor who may not complete the step is told
+nothing about it.
 
 #### What it adds
 

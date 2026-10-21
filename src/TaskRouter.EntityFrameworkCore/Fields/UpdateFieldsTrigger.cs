@@ -223,9 +223,11 @@ public sealed class UpdateFieldsTrigger(
             return $"Set {Summary(planned)} on {Lower(target.Label)}"
                 + (context.Run.IsTest ? " (test run: checked, nothing will be written)" : string.Empty);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Worth knowing before completing: by default a failed update stops the step.
+            // Not only InvalidOperationException: unreadable assignments throw a FormatException,
+            // an unconvertible type a NotSupportedException.
             return $"Update fields, which will fail: {ex.Message}";
         }
     }

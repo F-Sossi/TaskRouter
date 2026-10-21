@@ -81,6 +81,18 @@ public interface IWorkflowEngine
         CancellationToken ct = default) =>
         Task.FromResult(Result<IReadOnlyList<Core.Runner.PlannedAction>>.Ok([]));
 
+    /// <summary>
+    /// <see cref="GetCompletionPreviewAsync"/> for <see cref="CompleteWithSelectiveRejectionAsync"/>,
+    /// which raises different events and creates different steps.
+    /// </summary>
+    Task<Result<IReadOnlyList<Core.Runner.PlannedAction>>> GetSelectiveRejectionPreviewAsync(
+        int convergenceTaskId,
+        string outcomeKey,
+        IReadOnlyList<string> rejectedBranchKeys,
+        string actorId,
+        CancellationToken ct = default) =>
+        Task.FromResult(Result<IReadOnlyList<Core.Runner.PlannedAction>>.Ok([]));
+
     Task<Result<Unit>> CancelTaskAsync(
         int taskId,
         string actorId,

@@ -725,6 +725,16 @@ public sealed class EfWorkflowRunnerClient(
         return result.IsOk ? result.Unwrap() : [];
     }
 
+    public async Task<IReadOnlyList<PlannedAction>> GetSelectiveRejectionActionsAsync(
+        int convergenceTaskId, string outcomeKey, IReadOnlyList<string> rejectedBranchKeys, string actorId,
+        CancellationToken ct = default)
+    {
+        var result = await engine
+            .GetSelectiveRejectionPreviewAsync(convergenceTaskId, outcomeKey, rejectedBranchKeys, actorId, ct)
+            .ConfigureAwait(false);
+        return result.IsOk ? result.Unwrap() : [];
+    }
+
     // ───────────────────────────────── Writes ─────────────────────────────────
 
     public async Task<RunnerResult> CompleteAsync(

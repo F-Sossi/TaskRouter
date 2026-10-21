@@ -209,6 +209,25 @@ public class TriggerOfferTests
     }
 
     [TestMethod]
+    public async Task A_switched_off_field_update_does_not_block_publishing()
+    {
+        var client = Client(RunsEverything);
+        var model = await SeededAsync(client);
+        var trigger = new TriggerEditModel
+        {
+            TriggerKey = BuiltInTriggerKeys.UpdateFields,
+            Event = WorkflowEventKind.TaskCompleted,
+            IsActive = false
+        };
+        model.Tasks.First().Triggers.Add(trigger);
+
+        Assert.IsFalse((await client.ValidateAsync(model)).Any(e => e.Code.StartsWith("FIELDS_", StringComparison.Ordinal)));
+
+        trigger.IsActive = true;
+        Assert.IsTrue((await client.ValidateAsync(model)).Any(e => e.Code.StartsWith("FIELDS_", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
     public void Which_events_can_fire_follows_the_steps_shape()
     {
         var first = new TaskEditModel { TaskTypeKey = "first" };

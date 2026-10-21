@@ -830,7 +830,8 @@
             return;
         }
 
-        if (!await ConfirmActionsAsync(task, outcome))
+        if (!await ConfirmActionsAsync(task, outcome,
+                () => Client.GetCompletionActionsAsync(task.Id, outcome.OutcomeKey, ActorId)))
         {
             return;
         }
@@ -843,7 +844,8 @@
     /// fields it sets, people it notifies, systems it calls — and lets them back out. Asks
     /// nothing when nothing will happen, so a step without automation completes in one click.
     /// </summary>
-    private async Task<bool> ConfirmActionsAsync(RunTaskView task, OutcomeOption outcome)
+    private async Task<bool> ConfirmActionsAsync(
+        RunTaskView task, OutcomeOption outcome, Func<Task<IReadOnlyList<PlannedAction>>> preview)
     {
         IReadOnlyList<PlannedAction> actions;
 
@@ -851,7 +853,7 @@
 
         try
         {
-            actions = await Client.GetCompletionActionsAsync(task.Id, outcome.OutcomeKey, ActorId);
+            actions = await preview();
         }
         finally
         {
@@ -893,7 +895,8 @@
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: SelectiveRejectionRequest request }
-            && await ConfirmActionsAsync(task, outcome))
+            && await ConfirmActionsAsync(task, outcome, () => Client.GetSelectiveRejectionActionsAsync(
+                task.Id, request.OutcomeKey, request.RejectedBranchKeys, ActorId)))
         {
             await PerformAsync(() => Client.CompleteWithSelectiveRejectionAsync(
                 task.Id, request.OutcomeKey, request.RejectedBranchKeys, ActorId, request.Notes));

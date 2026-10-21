@@ -154,6 +154,46 @@ public class CompletionPreviewTests
             string.Join(" | ", actions.Select(a => a.Description)));
     }
 
+    [TestMethod]
+    public async Task Somebody_who_may_not_complete_the_step_is_told_nothing()
+    {
+        await _host.DisposeAsync();
+        _host = await TestHost.CreateAsync(withTriggers: true, policy: new DenyCompletionPolicy());
+        _workflowId = await _host.Db.WorkflowDefinitions
+            .Where(w => w.Name == DemoWorkflowSeeder.ChangeRequestWorkflowName)
+            .Select(w => w.Id)
+            .SingleAsync();
+        var entry = await StartAsync(await NewChangeRequestAsync());
+
+        var result = await _host.Engine.GetCompletionPreviewAsync(entry, "approved", "user-originator");
+
+        Assert.IsTrue(result.IsError, "The preview is authorized as the completion is.");
+    }
+
+    [TestMethod]
+    public async Task Sending_branches_back_lists_what_that_path_raises_not_an_ordinary_completion()
+    {
+        var convergence = await ConvergenceAsync();
+        await AddTriggerAsync(convergence, BuiltInTriggerKeys.Notify, WorkflowEventKind.SelectiveRejection, new()
+        {
+            ["sendTo"] = "nextAssignee", ["subject"] = "Rework", ["body"] = "b"
+        });
+
+        var rejecting = (await _host.Engine.GetSelectiveRejectionPreviewAsync(
+            convergence, "rejected", ["C100"], "user-division-head")).Unwrap();
+        var approving = (await _host.Engine.GetSelectiveRejectionPreviewAsync(
+            convergence, "approved", [], "user-division-head")).Unwrap();
+
+        Assert.IsTrue(rejecting.Any(a => a.When == "Some branches are sent back"
+                && a.Description.Contains("\"Rework\"", StringComparison.Ordinal)),
+            string.Join(" | ", rejecting.Select(a => $"{a.Step}/{a.When}: {a.Description}")));
+
+        // A straight approval routes on without raising "completed" on the convergence step.
+        Assert.IsFalse(approving.Any(a => a.Step == "PM Review" && a.When == "Step is completed"),
+            string.Join(" | ", approving.Select(a => $"{a.Step}/{a.When}: {a.Description}")));
+        Assert.IsFalse(approving.Any(a => a.When == "Some branches are sent back"));
+    }
+
     // ───────────────────────────── Fixtures ─────────────────────────────
 
     private async Task<IReadOnlyList<PlannedAction>> PreviewAsync(int taskId, string outcome) =>
@@ -165,6 +205,37 @@ public class CompletionPreviewTests
             document.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var run = (await _host.Engine.StartRunAsync(subject, _workflowId, "user-originator")).Unwrap();
         return run.Tasks.Single().Id;
+    }
+
+    /// <summary>A run forked over C100 and C200 at Provide Input, both branches done: PM Review is waiting.</summary>
+    private async Task<int> ConvergenceAsync()
+    {
+        var provideInput = await ProvideInputAsync();
+        var pmReview = await _host.Db.WorkflowTaskDefinitions
+            .Where(d => d.DisplayName == "PM Review").Select(d => d.Id).SingleAsync();
+
+        var fork = (await _host.Engine.ForkTaskAsync(provideInput, ["C100", "C200"], pmReview, "user-originator")).Unwrap();
+
+        foreach (var branch in fork.Branches)
+        {
+            (await _host.Engine.CompleteTaskAsync(branch.Id, "approved", "user-lead-c100")).Unwrap();
+        }
+
+        return await _host.Db.WorkflowTasks.AsNoTracking()
+            .Where(t => t.ForkManifestId != null && t.Status == WorkflowTaskStatus.NotStarted)
+            .Select(t => t.Id)
+            .SingleAsync();
+    }
+
+    private sealed class DenyCompletionPolicy : TaskRouter.Core.Abstractions.IWorkflowAuthorizationPolicy
+    {
+        public Task<TaskRouter.Core.Abstractions.WorkflowAuthorizationResult> EvaluateAsync(
+            TaskRouter.Core.Abstractions.WorkflowOperation operation,
+            TaskRouter.Core.Abstractions.WorkflowAuthorizationContext context,
+            CancellationToken ct = default) =>
+            Task.FromResult(operation == TaskRouter.Core.Abstractions.WorkflowOperation.CompleteTask
+                ? TaskRouter.Core.Abstractions.WorkflowAuthorizationResult.Denied("not yours")
+                : TaskRouter.Core.Abstractions.WorkflowAuthorizationResult.Allowed);
     }
 
     private async Task<int> ProvideInputAsync()

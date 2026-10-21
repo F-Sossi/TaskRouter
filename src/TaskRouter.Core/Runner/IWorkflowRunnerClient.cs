@@ -120,6 +120,16 @@ public interface IWorkflowRunnerClient
         int taskId, string outcomeKey, string actorId, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PlannedAction>>([]);
 
+    /// <summary>
+    /// <see cref="GetCompletionActionsAsync"/> for completing a convergence step while sending
+    /// <paramref name="rejectedBranchKeys"/> back, which raises different events and creates
+    /// one rework step per rejected branch.
+    /// </summary>
+    Task<IReadOnlyList<PlannedAction>> GetSelectiveRejectionActionsAsync(
+        int convergenceTaskId, string outcomeKey, IReadOnlyList<string> rejectedBranchKeys, string actorId,
+        CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PlannedAction>>([]);
+
     Task<RunnerResult> CompleteAsync(
         int taskId, string outcomeKey, string actorId, string? notes, CancellationToken ct = default);
 

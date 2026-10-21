@@ -30,6 +30,9 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
         public const string Person = "person";
     }
 
+    private static readonly string[] Choices =
+        [SendTo.Assignee, SendTo.NextAssignee, SendTo.Starter, SendTo.Actor, SendTo.Person];
+
     public string Key => BuiltInTriggerKeys.Notify;
 
     public TriggerDescriptor Describe() => new(
@@ -115,23 +118,41 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
             .ConfigureAwait(false);
 
         var sent = new List<string>();
+        var failed = new List<string>();
+        Exception? firstFailure = null;
 
         foreach (var recipient in recipients)
         {
-            await sink.SendAsync(new WorkflowNotification(
-                context.Subject,
-                context.Task.Id,
-                recipient,
-                subject ?? string.Empty,
-                body ?? string.Empty,
-                context.ActorId), ct)
-                .ConfigureAwait(false);
+            try
+            {
+                await sink.SendAsync(new WorkflowNotification(
+                    context.Subject,
+                    context.Task.Id,
+                    recipient,
+                    subject ?? string.Empty,
+                    body ?? string.Empty,
+                    context.ActorId), ct)
+                    .ConfigureAwait(false);
 
-            sent.Add(await NameAsync(context, recipient, ct).ConfigureAwait(false));
+                sent.Add(await NameAsync(context, recipient, ct).ConfigureAwait(false));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                firstFailure ??= ex;
+                failed.Add($"{await NameAsync(context, recipient, ct).ConfigureAwait(false)} ({ex.Message})");
+            }
         }
 
-        // Some of the next steps may have had nobody on them: say so alongside who was told.
+        // Nobody was told, so a retry repeats nothing: fail and let it be retried.
+        if (sent.Count == 0 && firstFailure is not null)
+        {
+            throw new InvalidOperationException($"Could not notify {string.Join(", ", failed)}.", firstFailure);
+        }
+
+        // Somebody was told. A retry runs the whole trigger again and would tell them twice, so
+        // this succeeds and says who was missed instead.
         context.Report.Detail = $"Sent to {string.Join(", ", sent)}."
+            + (failed.Count == 0 ? string.Empty : $" Could not notify {string.Join(", ", failed)}.")
             + (nobody.Count == 0 ? string.Empty : $" No one to notify for {string.Join("; ", nobody)}.");
     }
 
@@ -186,8 +207,9 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
         var recipient = context.Config.GetString("recipient");
 
         // Before "sendTo" existed, a recipient id meant that person and blank meant the assignee.
+        // Matched as validation matches it, ignoring case.
         var sendTo = context.Config.GetString("sendTo") is { Length: > 0 } chosen
-            ? chosen
+            ? Choices.FirstOrDefault(c => string.Equals(c, chosen, StringComparison.OrdinalIgnoreCase)) ?? chosen
             : string.IsNullOrWhiteSpace(recipient) ? SendTo.Assignee : SendTo.Person;
 
         switch (sendTo)

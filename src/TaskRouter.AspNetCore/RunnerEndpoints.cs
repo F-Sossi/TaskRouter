@@ -147,6 +147,25 @@ internal static class RunnerEndpoints
                 .ConfigureAwait(false));
         });
 
+        runner.MapGet("/tasks/{taskId:int}/selective-rejection-actions", async (
+            int taskId,
+            string outcome,
+            string[]? branch,
+            HttpContext http,
+            [FromServices] IWorkflowRunnerClient client,
+            [FromServices] IWorkflowEndpointActorAccessor accessor,
+            CancellationToken ct) =>
+        {
+            if (WorkflowEndpointActor.Resolve(http, accessor, out var actorId) is { } failure)
+            {
+                return failure;
+            }
+
+            return Results.Ok(await client
+                .GetSelectiveRejectionActionsAsync(taskId, outcome, branch ?? [], actorId, ct)
+                .ConfigureAwait(false));
+        });
+
         runner.MapPost("/tasks/{taskId:int}/complete", async (
             int taskId,
             CompleteTaskRequest body,
