@@ -1,7 +1,8 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-20**: `0.1.0-preview.14`, branch `field-triggers`, not yet merged or published — triggers that do what they say: Update fields, plain-language events and actions with an info button, notifications sent to a role, and a confirmation listing what a completion will do. It has breaking changes; see its entry below. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
+context. Last updated **2026-10-21**: a full review ahead of 1.0 — every finding, and the order to fix them in, is in
+[`docs/1.0-readiness.md`](docs/1.0-readiness.md); start there. Before that, **2026-10-20**: `0.1.0-preview.14`, merged to `main` as `a0a23d1` and published — triggers that do what they say: Update fields, plain-language events and actions with an info button, notifications sent to a role, and a confirmation listing what a completion will do. It has breaking changes; see its entry below. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
 reached, and nothing can be added under one. Before that, **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
 the validator and finishable in the runner. Before that, `0.1.0-preview.11` — people and org units are picked by
 typing rather than scrolling. Before that, **2026-10-12**: `0.1.0-preview.10` — a host's URLs stay under the app's
@@ -21,13 +22,16 @@ from somebody using it. Before that: shipping the runner and inbox, and acting o
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
 
-**Open / follow-ups (2026-10-15):**
+**Open / follow-ups (2026-10-21):** the defects found by the pre-1.0 review — three of them
+confirmed against SQL Server, including a second reassignment failing outright and a cancelled last
+branch completing the run — are listed in [`docs/1.0-readiness.md`](docs/1.0-readiness.md), section A.
+Items 1 and 6 below are carried there too. Still open from before:
 
 1. `WorkflowTransaction` retries can reuse a stale change tracker, so a retried attempt may skip a change as "unchanged".
 2. Actor and lookup values show raw keys when a trigger is reopened in the builder.
 3. There is no way to delete a never-published draft version.
 4. `TriggerExecution.Detail` (the field update's change summary) is recorded, but nothing in the library displays it yet; the run log does not show it.
-5. TRDIS wiring is the next plan.
+5. ~~TRDIS wiring is the next plan.~~ Done: the `preview.14` upgrade for the first host is prepared in its private deployment repository.
 6. Two forked branches completing at the same moment can both insert the same new run-scoped
    variable, and the second completion fails on the unique index. Run scope now works, so the
    demo's `lastInputOutcome` on forked Provide Input is exactly this case; it was hidden while
@@ -53,7 +57,7 @@ force-pushing a public tag onto different content. The stale tag was deleted fro
 
 ### `0.1.0-preview.14` — triggers that do what they say, 2026-10-20
 
-Branch `field-triggers`. Written against the first host's request: "when step A is completed,
+Merged as `a0a23d1` and published 2026-10-20. Written against the first host's request: "when step A is completed,
 set the work item's completion to 60%", and "every trigger option in the dropdown must work and
 say what it does". Still a preview; the breaking changes are listed first.
 
