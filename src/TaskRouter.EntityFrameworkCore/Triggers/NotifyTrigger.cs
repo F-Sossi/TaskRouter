@@ -62,7 +62,33 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
         ],
         // After commit, never inline: an email cannot be un-sent if the transaction
         // rolls back.
-        DefaultDispatch: TriggerDispatchMode.AfterCommit);
+        DefaultDispatch: TriggerDispatchMode.AfterCommit,
+        Help:
+        [
+            new("What it does",
+            [
+                "Works out who to send to, fills in the subject and body, and sends one notification per person "
+                    + "through the application's notification service.",
+                "Records \"Sent to …\", or \"No one to notify: …\" with the reason, so nobody has to guess why someone was not told."
+            ]),
+            new("Send to",
+            [
+                "Person assigned this step: whoever holds the step when the trigger fires. On \"Step is completed\" that is "
+                    + "whoever completed it.",
+                "Person assigned the next step: whoever the steps this completion creates are assigned to; one notification each. "
+                    + "Only on \"Step is completed\".",
+                "Person who started the workflow.",
+                "Person who did this: whoever completed, reassigned or cancelled the step. Nobody for reminders and overdue alerts.",
+                "A specific person: always the same person, picked from the directory."
+            ]),
+            new("Things to know",
+            [
+                "A step can be waiting unassigned in its section's queue. Then there is no one to notify, and that is recorded. "
+                    + "To catch whoever picks it up, add another notification on \"Step is reassigned\".",
+                "Runs after commit by default, so nobody is told about a change that was rolled back.",
+                "A test run sends real notifications."
+            ])
+        ]);
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {

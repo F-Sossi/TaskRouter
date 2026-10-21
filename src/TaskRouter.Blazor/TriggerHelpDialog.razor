@@ -1,0 +1,49 @@
+@using TaskRouter.Core.Abstractions
+@using TaskRouter.Core.Builder
+
+@*  The info button's answer: what a trigger action does, in full, then what every trigger
+    shares. The trigger's own help comes first, with anything the host added after it. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="max-width:680px">
+            <MudText Typo="Typo.body1">@Descriptor.Description</MudText>
+
+            @foreach (var section in Descriptor.Help ?? [])
+            {
+                <div>
+                    <MudText Typo="Typo.subtitle2">@section.Heading</MudText>
+                    <ul class="ma-0 pl-5">
+                        @foreach (var point in section.Points)
+                        {
+                            <li><MudText Typo="Typo.body2">@point</MudText></li>
+                        }
+                    </ul>
+                </div>
+            }
+
+            <MudExpansionPanels Elevation="0" Outlined="true">
+                @foreach (var section in TriggerHelp.Common)
+                {
+                    <MudExpansionPanel Text="@section.Heading">
+                        <ul class="ma-0 pl-5">
+                            @foreach (var point in section.Points)
+                            {
+                                <li><MudText Typo="Typo.body2">@point</MudText></li>
+                            }
+                        </ul>
+                    </MudExpansionPanel>
+                }
+            </MudExpansionPanels>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" OnClick="@(() => Dialog.Close())">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public TriggerDescriptor Descriptor { get; set; } = default!;
+}

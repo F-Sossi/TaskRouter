@@ -153,7 +153,10 @@ public sealed class EfWorkflowBuilderClient(
             // would be a notification nobody sends.
             DefaultDispatch = modes.Contains(descriptor.DefaultDispatch)
                 ? descriptor.DefaultDispatch
-                : TriggerDispatchMode.InTransaction
+                : TriggerDispatchMode.InTransaction,
+            Help = options.TriggerHelp.TryGetValue(descriptor.Key, out var hostHelp)
+                ? [.. descriptor.Help ?? [], .. hostHelp]
+                : descriptor.Help
         };
     }
 

@@ -41,7 +41,24 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
             new("scope", "Scope", TriggerParameterKind.Choice,
                 DefaultValue: "run", Choices: ["run", "task"])
         ],
-        DefaultDispatch: TriggerDispatchMode.InTransaction);
+        DefaultDispatch: TriggerDispatchMode.InTransaction,
+        Help:
+        [
+            new("What it does",
+            [
+                "Stores a named value on this run of the workflow. Nothing on the document changes.",
+                "Later triggers read it as {var:name}; route and trigger conditions test it as var.name."
+            ]),
+            new("Settings",
+            [
+                "Name: what to call it. Value: what to store; tokens are filled in when the trigger runs.",
+                "Scope: run (default) is visible to every later step; task keeps it to this step."
+            ]),
+            new("Things to know",
+            [
+                "It is bookkeeping, so it is not listed when somebody is asked to confirm a completion."
+            ])
+        ]);
 
     /// <summary>Bookkeeping: nobody completing a step needs to be told a variable is set.</summary>
     public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default) =>
@@ -100,7 +117,28 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
                         + "all-branches reports every branch of the run separately, which is what a "
                         + "convergence needs: one number per branch rather than the run's average.")
         ],
-        DefaultDispatch: TriggerDispatchMode.InTransaction);
+        DefaultDispatch: TriggerDispatchMode.InTransaction,
+        Help:
+        [
+            new("What it does",
+            [
+                "Works out a percentage from the workflow's own steps: steps completed ÷ steps in this run so far, rounded.",
+                "Cancelled steps do not count, and a step that was redone counts once.",
+                "Hands the percentage to the application, which decides where it is stored."
+            ]),
+            new("Scope",
+            [
+                "auto (default): this branch's progress on a step that is part of a fork, otherwise the whole run's.",
+                "run: one figure for the whole run. branch: this step's branch only.",
+                "all-branches: one figure per branch, which is what a convergence step needs."
+            ]),
+            new("Things to know",
+            [
+                "\"So far\" means steps the run has reached, not every step the workflow could have. "
+                    + "In a straight A → B → C workflow, completing A reports 50% (A done, B open), not 33%.",
+                "To set an exact percentage, use Update fields instead, and do not use both on one workflow: they would overwrite each other."
+            ])
+        ]);
 
     public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
@@ -187,7 +225,22 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
             new("timeoutSeconds", "Timeout (seconds)", TriggerParameterKind.Integer,
                 DefaultValue: "30")
         ],
-        DefaultDispatch: TriggerDispatchMode.AfterCommit);
+        DefaultDispatch: TriggerDispatchMode.AfterCommit,
+        Help:
+        [
+            new("What it does",
+            [
+                "Sends an HTTP POST with a JSON body to the URL, for another system to act on.",
+                "With no body set it sends the document's type and id, the run id, the step's id and type, the event, the outcome and the branch.",
+                "Any response other than success counts as a failure. After commit, a failed call is retried."
+            ]),
+            new("Things to know",
+            [
+                "The body fills in {task.*}, {subject.*} and {event} only; {actor}, {today} and {var:name} are sent as written.",
+                "Timeout is 30 seconds unless set.",
+                "A test run calls the URL for real."
+            ])
+        ]);
 
     public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {

@@ -60,7 +60,29 @@ public sealed class UpdateFieldsTrigger(
         // In the transaction, so the change and the step that caused it commit together.
         DefaultDispatch: TriggerDispatchMode.InTransaction,
         // A step whose document change was refused has not really happened.
-        DefaultFailurePolicy: TriggerFailurePolicy.FailOperation);
+        DefaultFailurePolicy: TriggerFailurePolicy.FailOperation,
+        Help:
+        [
+            new("What it does",
+            [
+                "Sets fields on the document, or on records related to it, to a fixed value or a token such as {today} or {actor}.",
+                "First checks the target, the fields, each value, and that the person may make the change. "
+                    + "A bad setup fails here, before anything is touched.",
+                "Writes only the values that actually change, then saves them together. If any part fails, none of it is kept.",
+                "Records exactly what changed, for example \"Completion %: 0 → 60\"."
+            ]),
+            new("Settings",
+            [
+                "Target: which record or records: the document, or the ones the application relates to it.",
+                "Fields: one or more field and value pairs."
+            ]),
+            new("Things to know",
+            [
+                "Runs as part of saving the step, and a failure stops the step completing. Choose Log and continue to let the step complete anyway.",
+                "A test run checks everything and reports what it would set, but writes nothing.",
+                "Somebody completing the step is shown what will be set and asked to confirm."
+            ])
+        ]);
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {

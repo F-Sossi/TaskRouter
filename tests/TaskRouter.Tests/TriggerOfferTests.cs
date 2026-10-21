@@ -190,6 +190,25 @@ public class TriggerOfferTests
     }
 
     [TestMethod]
+    public async Task Every_built_in_action_explains_itself_and_the_host_can_add_to_it()
+    {
+        var options = new WorkflowBuilderOptions();
+        options.TriggerHelp[BuiltInTriggerKeys.Notify] = [new("In this application", ["Appears under the bell."])];
+
+        var descriptors = await Client(RunsEverything, options).GetTriggerDescriptorsAsync();
+
+        foreach (var d in descriptors.Where(d => d.Key.StartsWith("workflow.", StringComparison.Ordinal)))
+        {
+            Assert.IsTrue(d.Help?.Any(h => h.Heading == "What it does" && h.Points.Count > 0) == true,
+                $"{d.DisplayName} has no help");
+        }
+
+        var notify = Notify(descriptors).Help!;
+        Assert.AreEqual("What it does", notify[0].Heading, "The trigger's own help comes first.");
+        Assert.AreEqual("In this application", notify[^1].Heading);
+    }
+
+    [TestMethod]
     public void Which_events_can_fire_follows_the_steps_shape()
     {
         var first = new TaskEditModel { TaskTypeKey = "first" };

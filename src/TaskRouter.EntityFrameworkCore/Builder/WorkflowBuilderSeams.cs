@@ -1,3 +1,5 @@
+using TaskRouter.Core.Abstractions;
+
 namespace TaskRouter.EntityFrameworkCore.Builder;
 
 /// <summary>
@@ -60,6 +62,14 @@ public sealed class WorkflowBuilderOptions
     /// is a trigger that publishes and never runs. Switch it on once such code exists.</para>
     /// </summary>
     public bool OfferCustomEvents { get; set; }
+
+    /// <summary>
+    /// Help the host adds to a trigger's own, by trigger key, shown after it behind the
+    /// builder's info button. For what only the host knows: where Report Progress's figure is
+    /// stored, what a field change rolls up into, where a notification appears.
+    /// </summary>
+    public Dictionary<string, IReadOnlyList<TriggerHelpSection>> TriggerHelp { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>

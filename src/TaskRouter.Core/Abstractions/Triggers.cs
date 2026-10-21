@@ -48,7 +48,14 @@ public sealed record TriggerDescriptor(
     // Appended, so positional construction elsewhere keeps compiling. Null means every
     // mode. The builder narrows it to what this host can run: without outbox processing an
     // after-commit or background trigger is queued and never picked up.
-    IReadOnlyList<TriggerDispatchMode>? DispatchModes = null);
+    IReadOnlyList<TriggerDispatchMode>? DispatchModes = null,
+    // The longer explanation behind the builder's info button. The host can add its own
+    // sections (WorkflowBuilderOptions.TriggerHelp), for what only it knows: where a value
+    // ends up, what it rolls up into.
+    IReadOnlyList<TriggerHelpSection>? Help = null);
+
+/// <summary>A titled list of points in a trigger's help: "What it does", "Things to know".</summary>
+public sealed record TriggerHelpSection(string Heading, IReadOnlyList<string> Points);
 
 public sealed record TriggerParameter(
     string Name,
