@@ -129,6 +129,24 @@ internal static class RunnerEndpoints
         // message, and a 500 would leave a user with a failed action and nothing to read.
         // The engine's authorization gate is what refuses; nothing here second-guesses it.
 
+        runner.MapGet("/tasks/{taskId:int}/completion-actions", async (
+            int taskId,
+            string outcome,
+            HttpContext http,
+            [FromServices] IWorkflowRunnerClient client,
+            [FromServices] IWorkflowEndpointActorAccessor accessor,
+            CancellationToken ct) =>
+        {
+            if (WorkflowEndpointActor.Resolve(http, accessor, out var actorId) is { } failure)
+            {
+                return failure;
+            }
+
+            return Results.Ok(await client
+                .GetCompletionActionsAsync(taskId, outcome, actorId, ct)
+                .ConfigureAwait(false));
+        });
+
         runner.MapPost("/tasks/{taskId:int}/complete", async (
             int taskId,
             CompleteTaskRequest body,

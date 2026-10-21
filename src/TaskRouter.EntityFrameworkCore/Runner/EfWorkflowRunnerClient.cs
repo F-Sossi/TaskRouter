@@ -714,6 +714,17 @@ public sealed class EfWorkflowRunnerClient(
     public async Task<IReadOnlyList<ActorOption>> GetActorsAsync(CancellationToken ct = default) =>
         await actors.GetActorsAsync(ct).ConfigureAwait(false);
 
+    /// <summary>
+    /// Degrades like the other reads: a preview that fails shows nothing, and the
+    /// completion itself still goes through the engine's own checks.
+    /// </summary>
+    public async Task<IReadOnlyList<PlannedAction>> GetCompletionActionsAsync(
+        int taskId, string outcomeKey, string actorId, CancellationToken ct = default)
+    {
+        var result = await engine.GetCompletionPreviewAsync(taskId, outcomeKey, actorId, ct).ConfigureAwait(false);
+        return result.IsOk ? result.Unwrap() : [];
+    }
+
     // ───────────────────────────────── Writes ─────────────────────────────────
 
     public async Task<RunnerResult> CompleteAsync(

@@ -15,7 +15,26 @@ public interface IWorkflowTrigger
     TriggerDescriptor Describe();
 
     Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default);
+
+    /// <summary>
+    /// What this trigger would do, in one sentence for the person about to cause it: the
+    /// runner shows it before a step is completed. The context is what
+    /// <see cref="ExecuteAsync"/> would get, with <see cref="WorkflowTriggerContext.Preview"/>
+    /// set; nothing may be changed.
+    ///
+    /// <para>Null shows the trigger's display name. An empty string shows nothing, for
+    /// bookkeeping nobody needs to be told about.</para>
+    /// </summary>
+    Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default) =>
+        Task.FromResult<string?>(null);
 }
+
+/// <summary>Set on a trigger context that is only being described, never executed.</summary>
+/// <param name="NextTasks">
+/// The steps the completion would create, as they would be assigned. They do not exist yet,
+/// so their ids are zero.
+/// </param>
+public sealed record TriggerPreview(IReadOnlyList<WorkflowTaskSnapshot> NextTasks);
 
 public sealed record TriggerDescriptor(
     string Key,
@@ -156,6 +175,12 @@ public sealed class WorkflowTriggerContext
 
     /// <summary>Host-side resolution for triggers that need domain services.</summary>
     public IServiceProvider? Services { get; init; }
+
+    /// <summary>
+    /// Non-null when the trigger is being asked what it would do, through
+    /// <see cref="IWorkflowTrigger.DescribeActionAsync"/>, rather than run.
+    /// </summary>
+    public TriggerPreview? Preview { get; init; }
 
     /// <summary>
     /// What this execution should record about itself. A fresh one per trigger execution;

@@ -108,6 +108,12 @@ public sealed class HttpWorkflowRunnerClient(HttpClient http, string prefix = "/
 
     // ───────────────────────────────── Writes ─────────────────────────────────
 
+    public async Task<IReadOnlyList<PlannedAction>> GetCompletionActionsAsync(
+        int taskId, string outcomeKey, string actorId, CancellationToken ct = default) =>
+        await ListAsync<PlannedAction>(
+            $"{_root}/tasks/{taskId}/completion-actions?outcome={Uri.EscapeDataString(outcomeKey)}", ct)
+            .ConfigureAwait(false);
+
     public async Task<RunnerResult> CompleteAsync(
         int taskId, string outcomeKey, string actorId, string? notes, CancellationToken ct = default) =>
         await PostAsync($"{_root}/tasks/{taskId}/complete", new { outcomeKey, notes }, ct)

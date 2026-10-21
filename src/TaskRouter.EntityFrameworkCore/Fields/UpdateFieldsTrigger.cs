@@ -66,9 +66,7 @@ public sealed class UpdateFieldsTrigger(
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var subjectType = context.Run.IsTest
-            ? await PublishedForAsync(context.Run.WorkflowDefinitionVersionId, ct).ConfigureAwait(false)
-            : context.Subject.SubjectType;
+        var subjectType = await SubjectTypeAsync(context, ct).ConfigureAwait(false);
 
         if (subjectType is null)
         {
@@ -77,47 +75,11 @@ public sealed class UpdateFieldsTrigger(
             return;
         }
 
-        var targetKey = context.Config.GetString("target");
-
-        if (string.IsNullOrWhiteSpace(targetKey))
-        {
-            throw new InvalidOperationException("This step's field update has no target configured.");
-        }
-
-        if (!catalog.TryGetTarget(subjectType, targetKey, out var target))
-        {
-            throw new InvalidOperationException(UnknownTarget(targetKey, subjectType));
-        }
-
-        var assignments = FieldAssignments.Parse(context.Config.GetString("assignments"));
-
-        if (assignments.Count == 0)
-        {
-            throw new InvalidOperationException("This step's field update has no fields configured.");
-        }
-
-        var planned = new List<(FieldRegistration Field, object? Value)>();
-
-        foreach (var assignment in assignments)
-        {
-            var field = target.Fields.FirstOrDefault(f => f.Key == assignment.Field)
-                ?? throw new InvalidOperationException(
-                    $"{subjectType} has no field '{assignment.Field}' on '{target.Label}'.");
-
-            var text = await TriggerTemplate.RenderAsync(assignment.Value, context, ct).ConfigureAwait(false);
-
-            if (!FieldValueConverter.TryConvert(text, field.ValueType, out var value, out var error))
-            {
-                throw new InvalidOperationException($"{field.Label}: {error}");
-            }
-
-            planned.Add((field, value));
-        }
+        var (target, assignments, planned) = await PlanAsync(context, subjectType, ct).ConfigureAwait(false);
 
         if (context.Run.IsTest)
         {
-            context.Report.Detail = $"Test run, nothing written. Would set on '{target.Label}': "
-                + string.Join("; ", planned.Select(p => $"{p.Field.Label} → {Show(p.Field, p.Value)}"));
+            context.Report.Detail = $"Test run, nothing written. Would set on '{target.Label}': " + Summary(planned);
             return;
         }
 
@@ -222,6 +184,96 @@ public sealed class UpdateFieldsTrigger(
 
         context.Report.Detail = changes.Count == 0 ? NothingToChange : string.Join("; ", changes);
     }
+
+    public async Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (await SubjectTypeAsync(context, ct).ConfigureAwait(false) is not { } subjectType)
+        {
+            return "Update fields (test run: nothing will be written)";
+        }
+
+        try
+        {
+            var (target, _, planned) = await PlanAsync(context, subjectType, ct).ConfigureAwait(false);
+
+            return $"Set {Summary(planned)} on {Lower(target.Label)}"
+                + (context.Run.IsTest ? " (test run: checked, nothing will be written)" : string.Empty);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Worth knowing before completing: by default a failed update stops the step.
+            return $"Update fields, which will fail: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// The run's subject type, or on a test run the one its workflow is published for:
+    /// a test run's subject is made up, so it is the workflow's own type that says what its
+    /// field updates may touch. Null when a test run's workflow names no type.
+    /// </summary>
+    private async Task<string?> SubjectTypeAsync(WorkflowTriggerContext context, CancellationToken ct) =>
+        context.Run.IsTest
+            ? await PublishedForAsync(context.Run.WorkflowDefinitionVersionId, ct).ConfigureAwait(false)
+            : context.Subject.SubjectType;
+
+    /// <summary>
+    /// Everything that can be checked without touching data: the target, the fields, and
+    /// each value rendered and converted. Throws, in a sentence, on the first problem.
+    /// </summary>
+    private async Task<(TargetRegistration Target, IReadOnlyList<FieldAssignment> Assignments,
+        List<(FieldRegistration Field, object? Value)> Planned)> PlanAsync(
+        WorkflowTriggerContext context, string subjectType, CancellationToken ct)
+    {
+        var targetKey = context.Config.GetString("target");
+
+        if (string.IsNullOrWhiteSpace(targetKey))
+        {
+            throw new InvalidOperationException("This step's field update has no target configured.");
+        }
+
+        if (!catalog.TryGetTarget(subjectType, targetKey, out var target))
+        {
+            throw new InvalidOperationException(UnknownTarget(targetKey, subjectType));
+        }
+
+        var assignments = FieldAssignments.Parse(context.Config.GetString("assignments"));
+
+        if (assignments.Count == 0)
+        {
+            throw new InvalidOperationException("This step's field update has no fields configured.");
+        }
+
+        var planned = new List<(FieldRegistration Field, object? Value)>();
+
+        foreach (var assignment in assignments)
+        {
+            var field = target.Fields.FirstOrDefault(f => f.Key == assignment.Field)
+                ?? throw new InvalidOperationException(
+                    $"{subjectType} has no field '{assignment.Field}' on '{target.Label}'.");
+
+            var text = await TriggerTemplate.RenderAsync(assignment.Value, context, ct).ConfigureAwait(false);
+
+            if (!FieldValueConverter.TryConvert(text, field.ValueType, out var value, out var error))
+            {
+                throw new InvalidOperationException($"{field.Label}: {error}");
+            }
+
+            planned.Add((field, value));
+        }
+
+        return (target, assignments, planned);
+    }
+
+    private static string Summary(List<(FieldRegistration Field, object? Value)> planned) =>
+        string.Join("; ", planned.Select(p => $"{p.Field.Label} → {Show(p.Field, p.Value)}"));
+
+    // "This document" reads as "this document" mid-sentence; an acronym-led label is left alone.
+    private static string Lower(string label) =>
+        label.Length > 1 && char.IsUpper(label[0]) && !char.IsUpper(label[1])
+            ? char.ToLowerInvariant(label[0]) + label[1..]
+            : label;
 
     /// <summary>The subject type a test run's workflow version is published for; null means any.</summary>
     private Task<string?> PublishedForAsync(int versionId, CancellationToken ct) =>

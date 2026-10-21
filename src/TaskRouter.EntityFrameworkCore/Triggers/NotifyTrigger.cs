@@ -109,6 +109,35 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
             + (nobody.Count == 0 ? string.Empty : $" No one to notify for {string.Join("; ", nobody)}.");
     }
 
+    public async Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (context.Services?.GetService<IWorkflowNotificationSink>() is null)
+        {
+            return string.Empty;
+        }
+
+        var (recipients, nobody) = await RecipientsAsync(context, ct).ConfigureAwait(false);
+        var subject = await TriggerTemplate.RenderAsync(context.Config.GetString("subject"), context, ct)
+            .ConfigureAwait(false);
+
+        if (recipients.Count == 0)
+        {
+            return $"No notification (\"{subject}\") will be sent: no one to notify, {string.Join("; ", nobody)}.";
+        }
+
+        var names = new List<string>();
+
+        foreach (var recipient in recipients)
+        {
+            names.Add(recipient == context.ActorId ? "you" : await NameAsync(context, recipient, ct).ConfigureAwait(false));
+        }
+
+        return $"Notify {string.Join(", ", names)}: \"{subject}\""
+            + (nobody.Count == 0 ? string.Empty : $" (no one to notify for {string.Join("; ", nobody)})");
+    }
+
     /// <summary>Who the notification goes to, and for each part that went to nobody, why.</summary>
     private async Task<(List<string> Recipients, List<string> Nobody)> RecipientsAsync(
         WorkflowTriggerContext context, CancellationToken ct)
@@ -182,6 +211,22 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
         if (context.Event != WorkflowEventKind.TaskCompleted)
         {
             nobody.Add("\"Person assigned the next step\" only works when a step is completed");
+            return;
+        }
+
+        if (context.Preview is { } preview)
+        {
+            // Not created yet: the preview says who they would go to.
+            if (preview.NextTasks.Count == 0)
+            {
+                nobody.Add("no step follows this one");
+            }
+
+            foreach (var step in preview.NextTasks)
+            {
+                add(step.AssignedToActorId, $"'{step.DisplayName}', which is not assigned to anyone");
+            }
+
             return;
         }
 

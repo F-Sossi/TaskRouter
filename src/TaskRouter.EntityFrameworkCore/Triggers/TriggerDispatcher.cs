@@ -2,7 +2,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 using TaskRouter.Core.Abstractions;
+using TaskRouter.Core.Builder;
 using TaskRouter.Core.Model;
+using TaskRouter.Core.Runner;
 
 using TaskRouter.EntityFrameworkCore.Fields;
 
@@ -22,6 +24,20 @@ public interface IWorkflowTriggerDispatcher
         string? customEventName = null,
         BranchContext? branch = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// What the triggers for this task's definition and event would do, without doing it:
+    /// the same triggers <see cref="DispatchAsync"/> would run, conditions applied, each
+    /// described by <see cref="IWorkflowTrigger.DescribeActionAsync"/>. The task may be one
+    /// that does not exist yet — a step the completion would create.
+    /// </summary>
+    Task<IReadOnlyList<PlannedAction>> PreviewAsync(
+        WorkflowTask task,
+        WorkflowEventKind eventKind,
+        string actorId,
+        TriggerPreview preview,
+        CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PlannedAction>>([]);
 }
 
 public sealed class TriggerDispatcher(
@@ -97,6 +113,68 @@ public sealed class TriggerDispatcher(
                     break;
             }
         }
+    }
+
+    public async Task<IReadOnlyList<PlannedAction>> PreviewAsync(
+        WorkflowTask task,
+        WorkflowEventKind eventKind,
+        string actorId,
+        TriggerPreview preview,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentNullException.ThrowIfNull(preview);
+
+        var definitions = await db.WorkflowTriggerDefinitions.AsNoTracking()
+            .Where(t => t.TaskDefinitionId == task.TaskDefinitionId
+                     && t.Event == eventKind
+                     && t.IsActive
+                     && !t.IsArchived)
+            .OrderBy(t => t.Order).ThenBy(t => t.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        if (definitions.Count == 0)
+        {
+            return [];
+        }
+
+        var context = await BuildContextAsync(task, eventKind, actorId, null, null, ct, preview).ConfigureAwait(false);
+        var step = task.TaskDefinition?.DisplayName ?? context.Task.DisplayName;
+        var actions = new List<PlannedAction>();
+
+        foreach (var definition in definitions)
+        {
+            if (!ShouldRun(definition, context) || !registry.TryGet(definition.TriggerKey, out var trigger))
+            {
+                continue;
+            }
+
+            string? said;
+
+            try
+            {
+                said = await trigger.DescribeActionAsync(
+                    With(context, definition), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A trigger that cannot describe itself is still going to run: name it.
+                logger.LogWarning(ex, "Trigger {TriggerKey} could not describe what it would do.", definition.TriggerKey);
+                said = null;
+            }
+
+            if (said is { Length: 0 })
+            {
+                continue;
+            }
+
+            actions.Add(new PlannedAction(
+                step,
+                TriggerEvents.Label(eventKind),
+                said ?? registry.Descriptors.FirstOrDefault(d => d.Key == trigger.Key)?.DisplayName ?? trigger.Key));
+        }
+
+        return actions;
     }
 
     /// <summary>
@@ -260,7 +338,8 @@ public sealed class TriggerDispatcher(
             ActorId = context.ActorId,
             Variables = context.Variables,
             Actions = context.Actions,
-            Services = context.Services
+            Services = context.Services,
+            Preview = context.Preview
         };
 
     private async Task<WorkflowTriggerContext> BuildContextAsync(
@@ -269,7 +348,8 @@ public sealed class TriggerDispatcher(
         string actorId,
         string? customEventName,
         BranchContext? branch,
-        CancellationToken ct)
+        CancellationToken ct,
+        TriggerPreview? preview = null)
     {
         var run = await db.WorkflowRuns
             .Include(r => r.DefinitionVersion)
@@ -280,8 +360,9 @@ public sealed class TriggerDispatcher(
             .Where(t => t.WorkflowRunId == task.WorkflowRunId)
             .ToListAsync(ct).ConfigureAwait(false);
 
-        // Prefer the tracked instance so in-flight changes are visible to the trigger.
-        var self = tasks.FirstOrDefault(t => t.Id == task.Id) ?? task;
+        // Prefer the tracked instance so in-flight changes are visible to the trigger. Not
+        // in a preview: there the task given is the one as it would be, which is the point.
+        var self = preview is null ? tasks.FirstOrDefault(t => t.Id == task.Id) ?? task : task;
 
         return new WorkflowTriggerContext
         {
@@ -297,7 +378,8 @@ public sealed class TriggerDispatcher(
             Actions = new WorkflowActions(
                 (IWorkflowEngine)services.GetService(typeof(IWorkflowEngine))!,
                 db, task.WorkflowRunId, actorId),
-            Services = services
+            Services = services,
+            Preview = preview
         };
     }
 }

@@ -43,6 +43,10 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         ],
         DefaultDispatch: TriggerDispatchMode.InTransaction);
 
+    /// <summary>Bookkeeping: nobody completing a step needs to be told a variable is set.</summary>
+    public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default) =>
+        Task.FromResult<string?>(string.Empty);
+
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -97,6 +101,15 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
                         + "convergence needs: one number per branch rather than the run's average.")
         ],
         DefaultDispatch: TriggerDispatchMode.InTransaction);
+
+    public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return Task.FromResult<string?>(context.Services?.GetService<IWorkflowProgressSink>() is null
+            ? string.Empty
+            : "Update the progress percentage from the steps completed so far");
+    }
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
@@ -175,6 +188,15 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
                 DefaultValue: "30")
         ],
         DefaultDispatch: TriggerDispatchMode.AfterCommit);
+
+    public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var url = context.Config.GetString("url");
+        var where = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : url;
+        return Task.FromResult<string?>($"Send a message to another system ({where})");
+    }
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
