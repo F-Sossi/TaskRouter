@@ -111,6 +111,25 @@ public interface IWorkflowRunnerClient
     /// </summary>
     Task<IReadOnlyList<BranchOption>> GetOrgUnitsAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// What completing a task with this outcome would also do: the automated actions of its
+    /// own "completed" triggers and of the steps the outcome leads to, in plain words, for
+    /// the person to confirm first. Empty when nothing would happen, or it cannot be told.
+    /// </summary>
+    Task<IReadOnlyList<PlannedAction>> GetCompletionActionsAsync(
+        int taskId, string outcomeKey, string actorId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PlannedAction>>([]);
+
+    /// <summary>
+    /// <see cref="GetCompletionActionsAsync"/> for completing a convergence step while sending
+    /// <paramref name="rejectedBranchKeys"/> back, which raises different events and creates
+    /// one rework step per rejected branch.
+    /// </summary>
+    Task<IReadOnlyList<PlannedAction>> GetSelectiveRejectionActionsAsync(
+        int convergenceTaskId, string outcomeKey, IReadOnlyList<string> rejectedBranchKeys, string actorId,
+        CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PlannedAction>>([]);
+
     Task<RunnerResult> CompleteAsync(
         int taskId, string outcomeKey, string actorId, string? notes, CancellationToken ct = default);
 
@@ -394,3 +413,9 @@ public sealed record TestRunResult(bool Success, int RunId, string? Error)
 
     public static TestRunResult Failed(string error) => new(false, 0, error);
 }
+
+/// <summary>One automated action a completion would cause.</summary>
+/// <param name="Step">The step the trigger belongs to.</param>
+/// <param name="When">When it happens, as the builder names the event: "Step is completed".</param>
+/// <param name="Description">What it does: "Set Completion % to 60 on the work item for this task's section".</param>
+public sealed record PlannedAction(string Step, string When, string Description);

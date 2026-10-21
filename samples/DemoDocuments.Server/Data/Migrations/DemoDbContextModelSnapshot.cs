@@ -762,6 +762,9 @@ namespace DemoDocuments.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("Detail")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Error")
                         .HasColumnType("nvarchar(max)");
 

@@ -830,7 +830,53 @@
             return;
         }
 
+        if (!await ConfirmActionsAsync(task, outcome,
+                () => Client.GetCompletionActionsAsync(task.Id, outcome.OutcomeKey, ActorId)))
+        {
+            return;
+        }
+
         await PerformAsync(() => Client.CompleteAsync(task.Id, outcome.OutcomeKey, ActorId, null));
+    }
+
+    /// <summary>
+    /// Says what the workflow will do on the person's behalf when they complete this step —
+    /// fields it sets, people it notifies, systems it calls — and lets them back out. Asks
+    /// nothing when nothing will happen, so a step without automation completes in one click.
+    /// </summary>
+    private async Task<bool> ConfirmActionsAsync(
+        RunTaskView task, OutcomeOption outcome, Func<Task<IReadOnlyList<PlannedAction>>> preview)
+    {
+        IReadOnlyList<PlannedAction> actions;
+
+        _busy = true;
+
+        try
+        {
+            actions = await preview();
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        if (actions.Count == 0)
+        {
+            return true;
+        }
+
+        var parameters = new DialogParameters<RunnerConfirmActionsDialog>
+        {
+            { x => x.TaskLabel, task.Label },
+            { x => x.OutcomeDisplayName, outcome.DisplayName },
+            { x => x.Actions, actions },
+            { x => x.IsTest, _detail?.Run.IsTest ?? false }
+        };
+
+        var dialog = await Dialogs.ShowAsync<RunnerConfirmActionsDialog>(
+            "This will also happen", parameters, MediumDialog);
+
+        return await dialog.Result is { Canceled: false };
     }
 
     private async Task RejectBranches(RunTaskView task, OutcomeOption outcome)
@@ -848,7 +894,9 @@
 
         var result = await dialog.Result;
 
-        if (result is { Canceled: false, Data: SelectiveRejectionRequest request })
+        if (result is { Canceled: false, Data: SelectiveRejectionRequest request }
+            && await ConfirmActionsAsync(task, outcome, () => Client.GetSelectiveRejectionActionsAsync(
+                task.Id, request.OutcomeKey, request.RejectedBranchKeys, ActorId)))
         {
             await PerformAsync(() => Client.CompleteWithSelectiveRejectionAsync(
                 task.Id, request.OutcomeKey, request.RejectedBranchKeys, ActorId, request.Notes));

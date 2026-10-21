@@ -276,6 +276,77 @@ either workaround.
 `samples/DemoDocuments.Server` does all of this and is the reference; see
 `Data/DemoDbContext.cs`, `Workflow/HostAdapters.cs` and `Program.cs`.
 
+### Letting authors set fields — `workflow.updateFields`
+
+Declare, once, which fields a workflow may set, and the builder offers an **Update fields**
+trigger over exactly those. This is the demo's catalog
+(`samples/DemoDocuments.Server/Workflow/DemoWorkflowFields.cs`), trimmed:
+
+```csharp
+services.AddTaskRouterFor<AppDbContext>()
+    .AddWorkflowFields(fields =>
+    {
+        // Every document type: shared targets and fields.
+        fields.ForSubjectTypes(["ChangeRequest", "Drawing"])
+            .Target<DocumentBase>("document", "This document", FieldCardinality.One, context =>
+            {
+                var id = int.Parse(context.Subject.SubjectId);
+                return context.Db<AppDbContext>().Documents.Where(d => d.Id == id);
+            })
+                .Field(d => d.Status, "Status", write: (document, status, _, _) =>
+                {
+                    StatusRules.MoveTo(document, status); // throws to refuse
+                    return Task.CompletedTask;
+                })
+                .Field(d => d.Comments, "Comments")
+            .Target<WorkItem>("allWorkItems", "All work items on this document", FieldCardinality.Many, context =>
+            {
+                var id = int.Parse(context.Subject.SubjectId);
+                return context.Db<AppDbContext>().WorkItems.Where(w => w.DocumentId == id);
+            })
+                .Field(w => w.WorkItemState, "State")
+                .Field(w => w.CurrentlyAssignedActorId, "Assigned to", FieldKind.Actor)
+                .OnWritten((item, context, ct) => { item.Modified = DateTime.UtcNow; return Task.CompletedTask; });
+
+        // One type's own fields, added to the same target.
+        fields.ForSubjectType("ChangeRequest")
+            .Extend<ChangeRequest>("document")
+                .Field(c => c.Urgency, "Urgency");
+    });
+```
+
+`AddWorkflowFields` is called once, on the engine builder. A `Target` names the records an
+update may touch (the resolver runs on the engine's context, inside its transaction; a
+`One` target that finds none or several fails the update); `Extend` adds fields to a target
+for some subject types only; `OnWritten` runs once per record that actually changed.
+
+- **Kinds** are inferred from the property type: text, number, true/false, ISO date, and an
+  enum stored by member name. The only kinds you may state are `FieldKind.Actor` (a string
+  actor id, picked from the actor directory unless an `options` delegate narrows it) and
+  `FieldKind.Lookup` (a key into another table, with an `options` delegate that supplies
+  the choices). A reference-typed property declared non-nullable (`required string`)
+  refuses an empty value. Target and field keys may use letters, digits, `_` and `-`.
+- **Give a field a `write` delegate** whenever host rules guard it. Throwing refuses the
+  write, and the exception's message is what the user sees.
+- **Values** may use `{actor}`, `{now}`, `{today}`, `{today+Nd}` / `{today-Nd}` (up to five
+  digits; `{today}` and `{now}` are UTC), `{var:name}` and the existing task tokens. Tokens are not allowed on choice,
+  true/false or lookup fields.
+- **All or nothing.** Every assignment on every record succeeds or none does, including
+  writes your own code saved. Under *Log and continue* the step still completes, with
+  nothing changed. If the undo itself fails, the operation stops whatever the policy says.
+- **Needs database savepoints.** SQL Server disables them when the connection string has
+  `MultipleActiveResultSets=True`, and the trigger refuses to run then.
+- **Meant to run `InTransaction`**, the default, with `FailOperation`. Under `AfterCommit` or
+  `Background`, `FailOperation` cannot undo a step that has already committed, and your
+  authorization policy must judge by `context.ActorId`, since there is no `HttpContext`.
+- **Checked as the acting user**, as `WorkflowOperation.UpdateSubjectFields`, with
+  `FieldTarget` and `Fields` set on the authorization context. The `System` actor (the
+  deadline sweep) bypasses the check.
+- **The builder validates on publish** (`FIELDS_*` errors) and offers target, field and
+  value pickers.
+- **Schema:** this adds `TaskRouterTriggerExecutions.Detail` (nullable), which is where each
+  update's change summary lands. Add a migration.
+
 ### Ready-made endpoints
 
 `TaskRouter.AspNetCore` maps every engine operation over HTTP:

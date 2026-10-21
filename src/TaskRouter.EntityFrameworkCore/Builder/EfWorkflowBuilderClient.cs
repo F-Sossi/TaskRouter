@@ -1,11 +1,14 @@
 using System.Text.Json;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
+using TaskRouter.Core.Fields;
 using TaskRouter.Core.Model;
 using TaskRouter.Core.Validation;
+using TaskRouter.EntityFrameworkCore.Fields;
 using TaskRouter.EntityFrameworkCore.Runner;
 using TaskRouter.EntityFrameworkCore.Triggers;
 
@@ -37,8 +40,14 @@ public sealed class EfWorkflowBuilderClient(
     IWorkflowTriggerRegistry triggers,
     IEnumerable<IRouteConditionEvaluator> conditions,
     WorkflowBuilderOptions options,
-    IWorkflowEditorActorAccessor actors) : IWorkflowBuilderClient
+    IWorkflowEditorActorAccessor actors,
+    WorkflowFieldCatalog? fields = null,
+    IServiceProvider? services = null,
+    ILogger<EfWorkflowBuilderClient>? logger = null) : IWorkflowBuilderClient
 {
+    /// <summary>Most options a picker is offered; the author narrows with a search.</summary>
+    private const int MaxOptions = 20;
+
     /// <summary>
     /// Who is editing. Every row this class writes is attributed to them, so a host without
     /// authentication still has to answer — see <see cref="IWorkflowEditorActorAccessor"/>.
@@ -122,8 +131,55 @@ public sealed class EfWorkflowBuilderClient(
         return new TaskTypeOption(type.Id, type.Key, type.DisplayName);
     }
 
+    /// <summary>
+    /// The registered triggers, narrowed to what this host can actually run: events nothing
+    /// here raises and dispatch modes nothing here drains are left out, so the builder never
+    /// offers an option that saves, publishes and then does nothing.
+    /// </summary>
     public Task<IReadOnlyList<TriggerDescriptor>> GetTriggerDescriptorsAsync(CancellationToken ct = default) =>
-        Task.FromResult(triggers.Descriptors);
+        Task.FromResult<IReadOnlyList<TriggerDescriptor>>([.. triggers.Descriptors.Select(OfferedHere)]);
+
+    private TriggerDescriptor OfferedHere(TriggerDescriptor descriptor)
+    {
+        var modes = (descriptor.DispatchModes ?? Enum.GetValues<TriggerDispatchMode>())
+            .Where(m => DispatchUnavailable(m) is null)
+            .ToList();
+
+        return descriptor with
+        {
+            SupportedEvents = [.. descriptor.SupportedEvents.Where(e => EventUnavailable(e) is null)],
+            DispatchModes = modes,
+            // Notify defaults to after commit; on a host without the outbox that default
+            // would be a notification nobody sends.
+            DefaultDispatch = modes.Contains(descriptor.DefaultDispatch)
+                ? descriptor.DefaultDispatch
+                : TriggerDispatchMode.InTransaction,
+            Help = options.TriggerHelp.TryGetValue(descriptor.Key, out var hostHelp)
+                ? [.. descriptor.Help ?? [], .. hostHelp]
+                : descriptor.Help
+        };
+    }
+
+    /// <summary>
+    /// Why this host never raises <paramref name="kind"/>, or null when it does. Without a
+    /// service provider the wiring cannot be inspected, so only the configured option counts.
+    /// </summary>
+    private string? EventUnavailable(WorkflowEventKind kind) => kind switch
+    {
+        WorkflowEventKind.Custom when !options.OfferCustomEvents =>
+            "this application raises no custom events",
+        WorkflowEventKind.TaskDueSoon or WorkflowEventKind.TaskOverdue
+            when services is not null && services.GetService(typeof(WorkflowDeadlineOptions)) is null =>
+            "this application does not run the deadline sweep (AddDeadlineProcessing)",
+        _ => null
+    };
+
+    /// <summary>Why this host never runs a trigger dispatched <paramref name="mode"/>, or null when it does.</summary>
+    private string? DispatchUnavailable(TriggerDispatchMode mode) =>
+        mode is TriggerDispatchMode.AfterCommit or TriggerDispatchMode.Background
+            && services is not null && services.GetService(typeof(WorkflowOutboxOptions)) is null
+            ? "this application does not run the outbox (AddOutboxProcessing), so it would never run"
+            : null;
 
     /// <summary>
     /// The role keys this host's assignment resolver understands, as configured on
@@ -140,6 +196,98 @@ public sealed class EfWorkflowBuilderClient(
 
     public Task<IReadOnlyList<string>> GetSubjectTypesAsync(CancellationToken ct = default) =>
         Task.FromResult(options.SubjectTypes);
+
+    public Task<IReadOnlyList<SubjectTargetInfo>> GetSubjectFieldsAsync(
+        string subjectType, CancellationToken ct = default) =>
+        Task.FromResult(fields?.Describe(subjectType) ?? []);
+
+    /// <summary>
+    /// A field with an options delegate asks it: a lookup always has one, and an actor
+    /// field may, to narrow its picker. An actor field without one asks the directory — the
+    /// same one the reassign picker uses — so a host gets actor pickers without writing
+    /// anything.
+    ///
+    /// <para>The actor fallback loads the host's whole directory and filters it in memory
+    /// on every call, so the UI should debounce what the author types.</para>
+    ///
+    /// <para>Never more than <see cref="MaxOptions"/>, and never an error: a host's lookup
+    /// that throws offers nothing (and is logged), because a broken picker should not take
+    /// the builder down with it.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<FieldChoice>> SearchFieldOptionsAsync(
+        string subjectType, string target, string field, string? search, CancellationToken ct = default)
+    {
+        if (fields is null || services is null
+            || !fields.TryGetTarget(subjectType, target, out var registration))
+        {
+            return [];
+        }
+
+        var match = registration.Fields.FirstOrDefault(f => f.Key == field);
+        search = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+
+        try
+        {
+            if (match?.Options is { } optionsOf)
+            {
+                var offered = await optionsOf(new FieldOptionsContext(search, services), ct).ConfigureAwait(false);
+
+                return [.. offered.Take(MaxOptions)];
+            }
+
+            if (match?.Kind != FieldKind.Actor
+                || services.GetService(typeof(IWorkflowActorResolver)) is not IWorkflowActorResolver directory)
+            {
+                return [];
+            }
+
+            return [.. (await PeopleAsync(directory, search, ct).ConfigureAwait(false))
+                .Select(a => new FieldChoice(a.ActorId, a.DisplayName))];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex,
+                "Could not list options for {SubjectType} {Target} {Field}; offering none.",
+                subjectType, target, field);
+
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The directory, narrowed by <paramref name="search"/>. Never an error, for the same
+    /// reason as <see cref="SearchFieldOptionsAsync"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<ActorOption>> SearchActorsAsync(string? search, CancellationToken ct = default)
+    {
+        if (services?.GetService(typeof(IWorkflowActorResolver)) is not IWorkflowActorResolver directory)
+        {
+            return [];
+        }
+
+        try
+        {
+            return await PeopleAsync(directory, string.IsNullOrWhiteSpace(search) ? null : search.Trim(), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Could not search the directory for people; offering none.");
+            return [];
+        }
+    }
+
+    private static async Task<IReadOnlyList<ActorOption>> PeopleAsync(
+        IWorkflowActorResolver directory, string? search, CancellationToken ct)
+    {
+        var people = await directory.GetActorsAsync(ct).ConfigureAwait(false);
+
+        return [.. people
+            .Where(a => search is null
+                || a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || a.ActorId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Take(MaxOptions)];
+    }
 
     public async Task<IReadOnlyList<OutcomeTypeOption>> GetOutcomeTypesAsync(
         CancellationToken ct = default)
@@ -320,8 +468,198 @@ public sealed class EfWorkflowBuilderClient(
         var errors = new List<ValidationError>();
         errors.AddRange(StructuralErrors(model));
         errors.AddRange(WorkflowDefinitionValidator.Validate(ToTransientVersion(model)));
+        errors.AddRange(FieldErrors(model));
+        errors.AddRange(TriggerEventErrors(model));
 
         return Task.FromResult<IReadOnlyList<ValidationError>>(errors);
+    }
+
+    /// <summary>
+    /// A trigger that can never fire: on an event this host never raises, on an event never
+    /// raised against its step (see <see cref="TriggerEvents.WhyNever"/>), or dispatched in a
+    /// way nothing here drains. Inactive triggers are skipped; they are not meant to fire.
+    /// Blocks publishing, not saving, like <see cref="FieldErrors"/>.
+    /// </summary>
+    private List<ValidationError> TriggerEventErrors(WorkflowEditModel model)
+    {
+        var errors = new List<ValidationError>();
+
+        foreach (var task in model.Tasks)
+        {
+            foreach (var trigger in task.Triggers.Where(t => t.IsActive))
+            {
+                var name = triggers.Descriptors
+                    .FirstOrDefault(d => string.Equals(d.Key, trigger.TriggerKey, StringComparison.OrdinalIgnoreCase))
+                    ?.DisplayName ?? trigger.TriggerKey;
+                var on = $"{name} on '{task.Label}' ({TriggerEvents.Label(trigger.Event)})";
+
+                if ((EventUnavailable(trigger.Event) ?? TriggerEvents.WhyNever(trigger.Event, task, model)) is { } why)
+                {
+                    errors.Add(new("TRIGGER_NEVER_FIRES", $"{on} can never fire: {why}."));
+                }
+
+                if (DispatchUnavailable(trigger.DispatchMode) is { } notRun)
+                {
+                    errors.Add(new("TRIGGER_NEVER_RUNS", $"{on} is set to run {trigger.DispatchMode}, but {notRun}."));
+                }
+
+                if (ChoiceOffEvent(trigger) is { } offEvent)
+                {
+                    errors.Add(new("TRIGGER_CHOICE_EVENT", $"{on}: {offEvent}"));
+                }
+            }
+        }
+
+        return errors;
+    }
+
+    /// <summary>
+    /// A choice picked on an event it does not work on: "Person assigned the next step" on
+    /// anything but a completion has no next step to look at.
+    /// </summary>
+    private string? ChoiceOffEvent(TriggerEditModel trigger)
+    {
+        var descriptor = triggers.Descriptors
+            .FirstOrDefault(d => string.Equals(d.Key, trigger.TriggerKey, StringComparison.OrdinalIgnoreCase));
+
+        foreach (var parameter in descriptor?.Parameters ?? [])
+        {
+            if (parameter.Options is null || !parameter.AppliesTo(trigger.Configuration, descriptor!.Parameters))
+            {
+                continue;
+            }
+
+            var value = trigger.Configuration.TryGetValue(parameter.Name, out var set) && !string.IsNullOrWhiteSpace(set)
+                ? set
+                : parameter.DefaultValue;
+            var choice = parameter.Options.FirstOrDefault(o => string.Equals(o.Value, value, StringComparison.OrdinalIgnoreCase));
+
+            if (choice?.Events is { } events && !events.Contains(trigger.Event))
+            {
+                return $"\"{parameter.Label}: {choice.Label}\" only works on "
+                    + string.Join(" or ", events.Select(e => $"\"{TriggerEvents.Label(e)}\"")) + ".";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// A field update the host could never run: a target or field this subject type does
+    /// not have, a value that cannot become the field's type, or a token where only a fixed
+    /// value makes sense. Not structural — a draft may be saved half-configured — so these
+    /// block publishing, not saving.
+    ///
+    /// <para>Lookup values are not checked: whether key 12 exists is a question about data,
+    /// and is answered when the trigger runs.</para>
+    ///
+    /// <para>Inactive triggers are skipped, as in <see cref="TriggerEventErrors"/>: one switched
+    /// off can never run, and switching a half-finished one off is how an author publishes the
+    /// rest of the workflow.</para>
+    /// </summary>
+    private List<ValidationError> FieldErrors(WorkflowEditModel model)
+    {
+        var errors = new List<ValidationError>();
+
+        foreach (var task in model.Tasks)
+        {
+            foreach (var trigger in task.Triggers.Where(t => t.IsActive
+                && string.Equals(t.TriggerKey, BuiltInTriggerKeys.UpdateFields, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (fields is null)
+                {
+                    errors.Add(new("FIELDS_NOT_CONFIGURED", $"'{task.Label}' updates fields, but this host declares none."));
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(model.SubjectType))
+                {
+                    errors.Add(new("FIELDS_NO_SUBJECT",
+                        $"'{task.Label}' updates fields, so the workflow needs a subject type."));
+                    continue;
+                }
+
+                // Read the way TriggerConfig reads it: keys without regard to case. Copied
+                // through the indexer, so keys that differ only by case cannot throw; the
+                // last one wins.
+                var configuration = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var (key, value) in trigger.Configuration)
+                {
+                    configuration[key] = value;
+                }
+                var targetKey = configuration.GetValueOrDefault("target");
+
+                if (string.IsNullOrWhiteSpace(targetKey))
+                {
+                    errors.Add(new("FIELDS_NO_TARGET", $"'{task.Label}' updates fields but has no target chosen."));
+                    continue;
+                }
+
+                // Target and field keys match ordinally on purpose: they come from a picker,
+                // and the runtime matches them the same way. (TriggerKey above is
+                // case-insensitive, by the existing convention for trigger keys.)
+                if (!fields.TryGetTarget(model.SubjectType, targetKey, out var target))
+                {
+                    errors.Add(new("FIELDS_UNKNOWN_TARGET",
+                        $"'{task.Label}': {UpdateFieldsTrigger.UnknownTarget(targetKey, model.SubjectType)}"));
+                    continue;
+                }
+
+                IReadOnlyList<FieldAssignment> assignments;
+
+                try
+                {
+                    assignments = FieldAssignments.Parse(configuration.GetValueOrDefault("assignments"));
+                }
+                catch (FormatException ex)
+                {
+                    errors.Add(new("FIELDS_BAD_CONFIG", $"'{task.Label}': {ex.Message}"));
+                    continue;
+                }
+
+                if (assignments.Count == 0)
+                {
+                    errors.Add(new("FIELDS_NO_FIELDS", $"'{task.Label}' updates fields but sets none."));
+                    continue;
+                }
+
+                foreach (var assignment in assignments)
+                {
+                    var field = target.Fields.FirstOrDefault(f => f.Key == assignment.Field);
+
+                    if (field is null)
+                    {
+                        errors.Add(new("FIELDS_UNKNOWN_FIELD",
+                            $"'{task.Label}': {model.SubjectType} has no field '{assignment.Field}' on '{target.Label}'."));
+                        continue;
+                    }
+
+                    if (assignment.Value?.Contains('{', StringComparison.Ordinal) == true)
+                    {
+                        if (field.Kind is FieldKind.Choice or FieldKind.Boolean or FieldKind.Lookup)
+                        {
+                            errors.Add(new("FIELDS_TOKEN_NOT_ALLOWED",
+                                $"'{task.Label}': {field.Label} takes a fixed value, not '{assignment.Value}'."));
+                        }
+
+                        continue;   // a token's value is only known when the trigger runs
+                    }
+
+                    if (field.Kind is FieldKind.Lookup)
+                    {
+                        continue;
+                    }
+
+                    if (!FieldValueConverter.TryConvert(assignment.Value, field.ValueType, out _, out var error))
+                    {
+                        errors.Add(new("FIELDS_BAD_VALUE", $"'{task.Label}': {field.Label}: {error}"));
+                    }
+                }
+            }
+        }
+
+        return errors;
     }
 
     /// <summary>

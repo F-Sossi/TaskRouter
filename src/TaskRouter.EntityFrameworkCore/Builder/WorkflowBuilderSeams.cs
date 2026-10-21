@@ -1,3 +1,5 @@
+using TaskRouter.Core.Abstractions;
+
 namespace TaskRouter.EntityFrameworkCore.Builder;
 
 /// <summary>
@@ -51,6 +53,23 @@ public sealed class WorkflowBuilderOptions
     /// a host that never translates them has nothing to constrain.</para>
     /// </summary>
     public IReadOnlyList<string> Outcomes { get; set; } = [];
+
+    /// <summary>
+    /// Whether to offer "Custom event" as something a trigger can fire on.
+    ///
+    /// <para>Off by default because nothing built in raises a custom event: only a host's own
+    /// trigger code does, through <c>RaiseEventAsync</c>. Offered to a host that has none, it
+    /// is a trigger that publishes and never runs. Switch it on once such code exists.</para>
+    /// </summary>
+    public bool OfferCustomEvents { get; set; }
+
+    /// <summary>
+    /// Help the host adds to a trigger's own, by trigger key, shown after it behind the
+    /// builder's info button. For what only the host knows: where Report Progress's figure is
+    /// stored, what a field change rolls up into, where a notification appears.
+    /// </summary>
+    public Dictionary<string, IReadOnlyList<TriggerHelpSection>> TriggerHelp { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>

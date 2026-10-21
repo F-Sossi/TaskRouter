@@ -1,0 +1,51 @@
+@using TaskRouter.Core.Runner
+
+@*  Before a step is completed: what the workflow will also do on the person's behalf —
+    set fields, notify people, call other systems — so nobody is surprised by it afterwards.
+    Returns true to go ahead, or a cancelled result. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1" Class="mb-3">
+            Choosing <b>@OutcomeDisplayName</b> on <b>@TaskLabel</b> will also:
+        </MudText>
+
+        <MudList T="string" Dense="true" ReadOnly="true">
+            @foreach (var group in Actions.GroupBy(a => (a.Step, a.When)))
+            {
+                <MudListSubheader Class="pb-0">
+                    @group.Key.Step — @group.Key.When.ToLowerInvariant()
+                </MudListSubheader>
+
+                @foreach (var action in group)
+                {
+                    <MudListItem T="string" Icon="@Icons.Material.Outlined.Bolt" IconColor="Color.Primary">
+                        @action.Description
+                    </MudListItem>
+                }
+            }
+        </MudList>
+
+        @if (IsTest)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                This is a test run. Field updates are only checked, but notifications and
+                messages to other systems are really sent.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" AutoFocus="true"
+                   OnClick="@(() => Dialog.Close(DialogResult.Ok(true)))">@OutcomeDisplayName</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter] public string TaskLabel { get; set; } = string.Empty;
+    [Parameter] public string OutcomeDisplayName { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<PlannedAction> Actions { get; set; } = [];
+    [Parameter] public bool IsTest { get; set; }
+}

@@ -153,7 +153,9 @@ public sealed class TestHost : IAsyncDisposable
             // Input, and the builder rejects a workflow whose trigger keys are not in
             // the registry — so a fixture missing this registration fails validation on
             // the seeded workflow itself, not on anything a test did.
-            .AddTrigger<DemoEscalationTrigger>();
+            .AddTrigger<DemoEscalationTrigger>()
+            // Mirrors Program.cs, so the field-update trigger is in the registry.
+            .AddWorkflowFields(DemoWorkflowFields.Configure);
 
         // Registered as a singleton instance so the test can observe what was delivered.
         // A later registration wins, so this overrides anything the builder added.

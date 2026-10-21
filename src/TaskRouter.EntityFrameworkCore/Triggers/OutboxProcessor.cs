@@ -122,7 +122,8 @@ public sealed class OutboxProcessor(
 
         try
         {
-            await ExecuteIsolatedAsync(message, definition, ct).ConfigureAwait(false);
+            // A failed attempt leaves Detail unchanged: its writes rolled back with its own transaction.
+            execution.Detail = await ExecuteIsolatedAsync(message, definition, ct).ConfigureAwait(false);
 
             message.Status = OutboxStatus.Succeeded;
             message.ProcessedAt = DateTime.UtcNow;
@@ -176,7 +177,7 @@ public sealed class OutboxProcessor(
     /// behaviour, and it is the caller's choice rather than a silent downgrade: without
     /// a container there is no second scope to be had.
     /// </summary>
-    private async Task ExecuteIsolatedAsync(
+    private async Task<string?> ExecuteIsolatedAsync(
         WorkflowOutboxMessage message, TriggerDefinition definition, CancellationToken ct)
     {
         var scopeFactory = services.GetService<IServiceScopeFactory>();
@@ -188,20 +189,21 @@ public sealed class OutboxProcessor(
 
             var inlineTrigger = Resolve(services, definition.TriggerKey);
             await inlineTrigger.ExecuteAsync(inlineContext, ct).ConfigureAwait(false);
-            return;
+            return inlineContext.Report.Detail;
         }
 
         using var scope = scopeFactory.CreateScope();
 
         var scopedDb = scope.ServiceProvider.GetRequiredService<IWorkflowDbContext>();
         var scopedTrigger = Resolve(scope.ServiceProvider, definition.TriggerKey);
+        WorkflowTriggerContext? context = null;
 
         // Through WorkflowTransaction, not BeginTransaction: a provider configured with
         // EnableRetryOnFailure refuses a user-initiated transaction outside its execution
         // strategy, and any host that expects to survive a transient network blip has it on.
         await WorkflowTransaction.ExecuteAsync(scopedDb, async token =>
         {
-            var context = await BuildContextAsync(scopedDb, scope.ServiceProvider, message, definition, token)
+            context = await BuildContextAsync(scopedDb, scope.ServiceProvider, message, definition, token)
                 .ConfigureAwait(false);
 
             await scopedTrigger.ExecuteAsync(context, token).ConfigureAwait(false);
@@ -210,6 +212,8 @@ public sealed class OutboxProcessor(
             // context is written by the transaction helper, which is what makes "its
             // writes commit together" true.
         }, ct).ConfigureAwait(false);
+
+        return context?.Report.Detail;
     }
 
     /// <summary>

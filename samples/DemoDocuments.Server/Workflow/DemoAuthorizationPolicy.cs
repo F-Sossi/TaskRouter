@@ -60,6 +60,9 @@ public sealed class DemoAuthorizationPolicy(DemoDbContext db) : IWorkflowAuthori
             or WorkflowOperation.UpdateTaskNotes
             or WorkflowOperation.AddAdHocTask
             or WorkflowOperation.StartSubWorkflow
+            // The trigger runs as whoever completed the step, so "may they do this task"
+            // is the question. A host wanting field-level rules reads context.Fields.
+            or WorkflowOperation.UpdateSubjectFields
                 => await DoingAsync(person, task, ct).ConfigureAwait(false),
 
             WorkflowOperation.CancelTask

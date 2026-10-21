@@ -296,9 +296,11 @@ else
                             {
                                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                                     <MudText Typo="Typo.body2">@DescriptorName(trigger.TriggerKey)</MudText>
-                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
-                                        @trigger.Event
-                                    </MudChip>
+                                    <MudTooltip Text="@TriggerEvents.Description(trigger.Event)">
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                            @TriggerEvents.Label(trigger.Event)
+                                        </MudChip>
+                                    </MudTooltip>
                                     <MudChip T="string" Size="Size.Small"
                                              Color="@(trigger.DispatchMode == TaskRouter.Core.Model.TriggerDispatchMode.InTransaction ? Color.Default : Color.Info)">
                                         @trigger.DispatchMode
@@ -564,7 +566,10 @@ else
             { x => x.Model, trigger },
             { x => x.Descriptors, _descriptors },
             { x => x.TaskOptions, TaskOptions },
-            { x => x.RoleOptions, _roles }
+            { x => x.RoleOptions, _roles },
+            { x => x.SubjectType, _model?.SubjectType },
+            { x => x.Task, task },
+            { x => x.Workflow, _model }
         };
 
         var dialog = await Dialogs.ShowAsync<TriggerEditDialog>(

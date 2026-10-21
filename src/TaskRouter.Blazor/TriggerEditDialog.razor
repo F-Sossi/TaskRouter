@@ -1,6 +1,7 @@
 @using TaskRouter.Core.Abstractions
 @using TaskRouter.Core.Builder
 @using TaskRouter.Core.Model
+@inject IDialogService Dialogs
 
 <MudDialog>
     <DialogContent>
@@ -8,41 +9,62 @@
 
             @* Populated from the registry, grouped by namespace — the builder never
                hardcodes a trigger. *@
-            <MudSelect T="string"
-                       Value="@_edit.TriggerKey"
-                       ValueChanged="OnTriggerChanged"
-                       Label="Trigger action"
-                       Variant="Variant.Outlined"
-                       Required="true">
-                @foreach (var group in Descriptors.GroupBy(d => Namespace(d.Key)).OrderBy(g => g.Key))
-                {
-                    <MudSelectItem T="string" Value="@("__group_" + group.Key)" Disabled="true">
-                        <b>@group.Key</b>
-                    </MudSelectItem>
-
-                    @foreach (var d in group.OrderBy(d => d.DisplayName))
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudSelect T="string"
+                           Value="@_edit.TriggerKey"
+                           ValueChanged="OnTriggerChanged"
+                           Label="Trigger action"
+                           Variant="Variant.Outlined"
+                           Required="true"
+                           Class="flex-grow-1">
+                    @foreach (var group in Descriptors.GroupBy(d => Namespace(d.Key)).OrderBy(g => g.Key))
                     {
-                        <MudSelectItem T="string" Value="@d.Key">@d.DisplayName</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("__group_" + group.Key)" Disabled="true">
+                            <b>@group.Key</b>
+                        </MudSelectItem>
+
+                        @foreach (var d in group.OrderBy(d => d.DisplayName))
+                        {
+                            <MudSelectItem T="string" Value="@d.Key">
+                                <div>@d.DisplayName</div>
+                                <div class="mud-text-secondary" style="font-size:0.8rem;white-space:normal">@d.Description</div>
+                            </MudSelectItem>
+                        }
                     }
-                }
-            </MudSelect>
+                </MudSelect>
+
+                <MudTooltip Text="What this action does, in full">
+                    <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                   Color="Color.Primary"
+                                   Disabled="@(Selected is null)"
+                                   aria-label="What this trigger action does"
+                                   OnClick="ShowHelpAsync" />
+                </MudTooltip>
+            </MudStack>
 
             @if (Selected is not null)
             {
                 <MudText Typo="Typo.body2" Class="mud-text-secondary">@Selected.Description</MudText>
             }
 
-            @* Only events the selected trigger actually handles. The original engine offered every
-               event for every trigger, including combinations that made no sense. *@
+            @* Only events the selected trigger handles, that this host raises, and that are
+               raised against this step: "the workflow starts" on the third step saves,
+               publishes and never fires. The original engine offered every event for every
+               trigger, including combinations that made no sense. *@
             <MudSelect T="WorkflowEventKind"
                        Value="@_edit.Event"
                        ValueChanged="@(v => { _edit.Event = v; StateHasChanged(); })"
+                       ToStringFunc="@(e => TriggerEvents.Label(e))"
                        Label="Fires when"
                        Variant="Variant.Outlined"
+                       HelperText="@EventHelp"
                        Disabled="@(Selected is null)">
-                @foreach (var e in Selected?.SupportedEvents ?? [])
+                @foreach (var e in OfferedEvents)
                 {
-                    <MudSelectItem T="WorkflowEventKind" Value="@e">@Humanise(e)</MudSelectItem>
+                    <MudSelectItem T="WorkflowEventKind" Value="@e">
+                        <div>@TriggerEvents.Label(e)</div>
+                        <div class="mud-text-secondary" style="font-size:0.8rem;white-space:normal">@TriggerEvents.Description(e)</div>
+                    </MudSelectItem>
                 }
             </MudSelect>
 
@@ -60,7 +82,9 @@
             <TriggerConfigForm Descriptor="Selected"
                                Configuration="_edit.Configuration"
                                TaskOptions="TaskOptions"
-                               RoleOptions="RoleOptions" />
+                               RoleOptions="RoleOptions"
+                               SubjectType="@SubjectType"
+                               Event="_edit.Event" />
 
             <MudDivider />
 
@@ -73,7 +97,7 @@
                                    Label="When to run"
                                    Variant="Variant.Outlined"
                                    HelperText="@DispatchHelp(_edit.DispatchMode)">
-                            @foreach (var m in Enum.GetValues<TriggerDispatchMode>())
+                            @foreach (var m in OfferedDispatchModes)
                             {
                                 <MudSelectItem T="TriggerDispatchMode" Value="@m">@Humanise(m)</MudSelectItem>
                             }
@@ -140,6 +164,59 @@
         = new Dictionary<string, string>();
     [Parameter] public IReadOnlyList<string> RoleOptions { get; set; } = [];
 
+    /// <summary>The workflow's subject type, which a field-update trigger's fields depend on.</summary>
+    [Parameter] public string? SubjectType { get; set; }
+
+    /// <summary>
+    /// The step the trigger hangs off, and its workflow: together they decide which events
+    /// can fire on it. Either missing, every event the trigger handles is offered.
+    /// </summary>
+    [Parameter] public TaskEditModel? Task { get; set; }
+
+    [Parameter] public WorkflowEditModel? Workflow { get; set; }
+
+    private async Task ShowHelpAsync()
+    {
+        if (Selected is null)
+        {
+            return;
+        }
+
+        await Dialogs.ShowAsync<TriggerHelpDialog>(
+            Selected.DisplayName,
+            new DialogParameters<TriggerHelpDialog> { { x => x.Descriptor, Selected } },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true });
+    }
+
+    /// <summary>
+    /// The events worth offering. The trigger's current event is always kept, so reopening
+    /// one that can no longer fire shows what it is set to rather than silently changing it;
+    /// the publish check names it.
+    /// </summary>
+    private IReadOnlyList<WorkflowEventKind> OfferedEvents =>
+        Selected is null ? [] : [.. OfferableEvents(Selected).Append(_edit.Event).Distinct()];
+
+    private IEnumerable<WorkflowEventKind> OfferableEvents(TriggerDescriptor? descriptor) =>
+        (descriptor?.SupportedEvents ?? []).Where(e =>
+            Task is null || Workflow is null || TriggerEvents.WhyNever(e, Task, Workflow) is null);
+
+    private IReadOnlyList<TriggerDispatchMode> OfferedDispatchModes =>
+        (Selected?.DispatchModes ?? Enum.GetValues<TriggerDispatchMode>()).Append(_edit.DispatchMode).Distinct().ToList();
+
+    private string EventHelp
+    {
+        get
+        {
+            var never = Task is not null && Workflow is not null
+                ? TriggerEvents.WhyNever(_edit.Event, Task, Workflow)
+                : null;
+
+            return never is null
+                ? TriggerEvents.Description(_edit.Event)
+                : $"This will never fire: {never}. Pick another event.";
+        }
+    }
+
     /// <summary>
     /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
     /// passes reference types by reference, so binding straight to the parameter wrote
@@ -168,34 +245,14 @@
             return;
         }
 
-        _edit.TriggerKey = key;
-
-        var descriptor = Selected;
-        if (descriptor is not null)
+        var descriptor = Descriptors.FirstOrDefault(d => d.Key == key);
+        if (descriptor is null)
         {
-            // Adopt the trigger's own defaults, and drop configuration belonging to
-            // whatever was selected before.
-            _edit.DispatchMode = descriptor.DefaultDispatch;
-            _edit.FailurePolicy = descriptor.DefaultFailurePolicy;
-
-            var valid = descriptor.Parameters.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var stale in _edit.Configuration.Keys.Where(k => !valid.Contains(k)).ToList())
-            {
-                _edit.Configuration.Remove(stale);
-            }
-
-            foreach (var p in descriptor.Parameters.Where(p => p.DefaultValue is not null))
-            {
-                if (!_edit.Configuration.ContainsKey(p.Name))
-                {
-                    _edit.Configuration[p.Name] = p.DefaultValue;
-                }
-            }
-
-            if (!descriptor.SupportedEvents.Contains(_edit.Event) && descriptor.SupportedEvents.Count > 0)
-            {
-                _edit.Event = descriptor.SupportedEvents[0];
-            }
+            _edit.TriggerKey = key;
+        }
+        else
+        {
+            TriggerSelection.Apply(_edit, descriptor, [.. OfferableEvents(descriptor)]);
         }
 
         StateHasChanged();

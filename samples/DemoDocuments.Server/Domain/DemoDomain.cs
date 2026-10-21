@@ -17,9 +17,10 @@ public enum DemoDocumentType
 public enum DocumentStatus
 {
     Scheduled,
-    InProgress,
+    [Display(Name = "In Progress")] InProgress,
     Complete,
-    Cancelled
+    Cancelled,
+    [Display(Name = "On Hold")] OnHold
 }
 
 public enum WorkItemStatus

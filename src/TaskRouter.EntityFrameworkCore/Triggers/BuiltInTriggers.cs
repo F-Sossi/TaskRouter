@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +19,7 @@ public static class BuiltInTriggerKeys
     public const string ReportProgress = "workflow.reportProgress";
     public const string Notify = "workflow.notify";
     public const string Webhook = "workflow.webhook";
+    public const string UpdateFields = "workflow.updateFields";
 }
 
 /// <summary>Writes a workflow variable. The simplest useful trigger.</summary>
@@ -26,17 +30,39 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
     public TriggerDescriptor Describe() => new(
         Key,
         "Set Workflow Variable",
-        "Stores a value against the run, readable by later triggers and route conditions.",
+        "Remembers a value on this run of the workflow, such as who approved or a date, so later steps, "
+        + "route conditions and other triggers can read it as {var:name}. Changes nothing on the document.",
         SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
         Parameters:
         [
             new("name", "Variable name", TriggerParameterKind.Text, Required: true),
             new("value", "Value", TriggerParameterKind.Text,
-                HelpText: "Supports {task.outcome}, {task.branch}, {task.id}, {event}."),
+                HelpText: "Supports {task.outcome}, {task.branch}, {task.id}, {event}, {actor}, {today}, {today+Nd}, {today-Nd}, {now}, {var:name}."),
             new("scope", "Scope", TriggerParameterKind.Choice,
                 DefaultValue: "run", Choices: ["run", "task"])
         ],
-        DefaultDispatch: TriggerDispatchMode.InTransaction);
+        DefaultDispatch: TriggerDispatchMode.InTransaction,
+        Help:
+        [
+            new("What it does",
+            [
+                "Stores a named value on this run of the workflow. Nothing on the document changes.",
+                "Later triggers read it as {var:name}; route and trigger conditions test it as var.name."
+            ]),
+            new("Settings",
+            [
+                "Name: what to call it. Value: what to store; tokens are filled in when the trigger runs.",
+                "Scope: run (default) is visible to every later step; task keeps it to this step."
+            ]),
+            new("Things to know",
+            [
+                "It is bookkeeping, so it is not listed when somebody is asked to confirm a completion."
+            ])
+        ]);
+
+    /// <summary>Bookkeeping: nobody completing a step needs to be told a variable is set.</summary>
+    public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default) =>
+        Task.FromResult<string?>(string.Empty);
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
@@ -45,9 +71,17 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         var name = context.Config.GetString("name")
             ?? throw new InvalidOperationException("Parameter 'name' is required.");
 
-        var value = TriggerTemplate.Render(context.Config.GetString("value"), context);
+        var value = await TriggerTemplate.RenderAsync(context.Config.GetString("value"), context, ct)
+            .ConfigureAwait(false);
 
-        await context.Variables.SetAsync(name, value, VariableType.String, ct).ConfigureAwait(false);
+        // context.Variables is the task's view: it writes against the task. "run" (the
+        // default) writes against the run, so a later step and the route conditions see it.
+        var scope = context.Config.GetString("scope");
+        var variables = string.Equals(scope, "task", StringComparison.OrdinalIgnoreCase)
+            ? context.Variables
+            : (context.Variables as WorkflowVariables)?.ForRun() ?? context.Variables;
+
+        await variables.SetAsync(name, value, VariableType.String, ct).ConfigureAwait(false);
     }
 }
 
@@ -65,7 +99,8 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
     public TriggerDescriptor Describe() => new(
         Key,
         "Report Progress",
-        "Calculates completion for the run (or the completing branch) and reports it to the host.",
+        "Works out how far through the workflow the document is, from the steps completed so far, and hands "
+        + "the percentage to the application to store. To set a fixed percentage instead, use Update fields.",
         SupportedEvents:
         [
             WorkflowEventKind.TaskCompleted,
@@ -82,7 +117,37 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
                         + "all-branches reports every branch of the run separately, which is what a "
                         + "convergence needs: one number per branch rather than the run's average.")
         ],
-        DefaultDispatch: TriggerDispatchMode.InTransaction);
+        DefaultDispatch: TriggerDispatchMode.InTransaction,
+        Help:
+        [
+            new("What it does",
+            [
+                "Works out a percentage from the workflow's own steps: steps completed ÷ steps in this run so far, rounded.",
+                "Cancelled steps do not count, and a step that was redone counts once.",
+                "Hands the percentage to the application, which decides where it is stored."
+            ]),
+            new("Scope",
+            [
+                "auto (default): this branch's progress on a step that is part of a fork, otherwise the whole run's.",
+                "run: one figure for the whole run. branch: this step's branch only.",
+                "all-branches: one figure per branch, which is what a convergence step needs."
+            ]),
+            new("Things to know",
+            [
+                "\"So far\" means steps the run has reached, not every step the workflow could have. "
+                    + "In a straight A → B → C workflow, completing A reports 50% (A done, B open), not 33%.",
+                "To set an exact percentage, use Update fields instead, and do not use both on one workflow: they would overwrite each other."
+            ])
+        ]);
+
+    public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return Task.FromResult<string?>(context.Services?.GetService<IWorkflowProgressSink>() is null
+            ? string.Empty
+            : "Update the progress percentage from the steps completed so far");
+    }
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
@@ -141,50 +206,6 @@ public sealed class ReportProgressTrigger : IWorkflowTrigger
     }
 }
 
-/// <summary>Hands a message to the host's notification sink, after commit.</summary>
-public sealed class NotifyTrigger : IWorkflowTrigger
-{
-    public string Key => BuiltInTriggerKeys.Notify;
-
-    public TriggerDescriptor Describe() => new(
-        Key,
-        "Send Notification",
-        "Sends a message through the host's notification sink once the transaction commits.",
-        SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
-        Parameters:
-        [
-            new("subject", "Subject", TriggerParameterKind.Text, Required: true),
-            new("body", "Body", TriggerParameterKind.Template, Required: true),
-            new("recipient", "Recipient actor id", TriggerParameterKind.Text,
-                HelpText: "Leave blank to send to the task's current assignee.")
-        ],
-        // After commit, never inline: an email cannot be un-sent if the transaction
-        // rolls back.
-        DefaultDispatch: TriggerDispatchMode.AfterCommit);
-
-    public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        var sink = context.Services?.GetService<IWorkflowNotificationSink>();
-        if (sink is null)
-        {
-            return;
-        }
-
-        var recipient = context.Config.GetString("recipient") ?? context.Task.AssignedToActorId;
-
-        await sink.SendAsync(new WorkflowNotification(
-            context.Subject,
-            context.Task.Id,
-            recipient,
-            TriggerTemplate.Render(context.Config.GetString("subject"), context) ?? string.Empty,
-            TriggerTemplate.Render(context.Config.GetString("body"), context) ?? string.Empty,
-            context.ActorId), ct)
-            .ConfigureAwait(false);
-    }
-}
-
 /// <summary>POSTs a JSON body to a URL, after commit.</summary>
 public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null) : IWorkflowTrigger
 {
@@ -193,17 +214,42 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
     public TriggerDescriptor Describe() => new(
         Key,
         "Call Webhook",
-        "POSTs a JSON body to a URL once the transaction commits.",
+        "Posts a JSON message to another system's URL once the step's change has been saved. For "
+        + "integrations: the other system tells you the URL.",
         SupportedEvents: Enum.GetValues<WorkflowEventKind>(),
         Parameters:
         [
             new("url", "URL", TriggerParameterKind.Url, Required: true),
             new("body", "JSON body", TriggerParameterKind.Template,
-                HelpText: "Leave blank to send a default event payload."),
+                HelpText: "Leave blank to send a default event payload. Renders the {task.*}, {subject.*} and {event} tokens; {actor}, {now}, {today} and {var:name} are sent as written."),
             new("timeoutSeconds", "Timeout (seconds)", TriggerParameterKind.Integer,
                 DefaultValue: "30")
         ],
-        DefaultDispatch: TriggerDispatchMode.AfterCommit);
+        DefaultDispatch: TriggerDispatchMode.AfterCommit,
+        Help:
+        [
+            new("What it does",
+            [
+                "Sends an HTTP POST with a JSON body to the URL, for another system to act on.",
+                "With no body set it sends the document's type and id, the run id, the step's id and type, the event, the outcome and the branch.",
+                "Any response other than success counts as a failure. After commit, a failed call is retried."
+            ]),
+            new("Things to know",
+            [
+                "The body fills in {task.*}, {subject.*} and {event} only; {actor}, {today} and {var:name} are sent as written.",
+                "Timeout is 30 seconds unless set.",
+                "A test run calls the URL for real."
+            ])
+        ]);
+
+    public Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var url = context.Config.GetString("url");
+        var where = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : url;
+        return Task.FromResult<string?>($"Send a message to another system ({where})");
+    }
 
     public async Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default)
     {
@@ -241,7 +287,7 @@ public sealed class WebhookTrigger(IHttpClientFactory? httpClientFactory = null)
 }
 
 /// <summary>Minimal token substitution for trigger configuration values.</summary>
-internal static class TriggerTemplate
+internal static partial class TriggerTemplate
 {
     public static string? Render(string? template, WorkflowTriggerContext context)
     {
@@ -261,4 +307,78 @@ internal static class TriggerTemplate
             .Replace("{subject.type}", context.Subject.SubjectType, StringComparison.OrdinalIgnoreCase)
             .Replace("{subject.id}", context.Subject.SubjectId, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// <see cref="Render"/>, plus the tokens that need the clock, the actor, or the run's
+    /// variables: <c>{actor}</c>, <c>{now}</c>, <c>{today}</c>, <c>{today+Nd}</c>,
+    /// <c>{today-Nd}</c>, <c>{var:name}</c>. Dates render as ISO-8601, UTC. A variable
+    /// that is not set renders empty; any other unknown token passes through literally.
+    /// </summary>
+    public static async Task<string?> RenderAsync(
+        string? template, WorkflowTriggerContext context, CancellationToken ct = default)
+    {
+        var rendered = Render(template, context);
+
+        if (string.IsNullOrEmpty(rendered) || !rendered.Contains('{', StringComparison.Ordinal))
+        {
+            return rendered;
+        }
+
+        var matches = ContextToken().Matches(rendered);
+
+        if (matches.Count == 0)
+        {
+            return rendered;
+        }
+
+        IReadOnlyDictionary<string, string?>? variables = null;
+
+        if (rendered.Contains("{var:", StringComparison.OrdinalIgnoreCase))
+        {
+            variables = await context.Variables.GetAllAsync(ct).ConfigureAwait(false);
+        }
+
+        var now = DateTime.UtcNow;
+
+        // Render has already substituted the task and subject tokens, and its output is
+        // what is scanned here. This second step is one pass: text it substitutes (a
+        // variable's value, the actor) is never rescanned, so a variable whose value looks
+        // like a token stays as it was written. A task or subject value that looks like one
+        // of these tokens would still be rendered.
+        return ContextToken().Replace(rendered, match =>
+        {
+            if (match.Groups["actor"].Success)
+            {
+                return context.ActorId;
+            }
+
+            if (match.Groups["now"].Success)
+            {
+                return now.ToString("O", CultureInfo.InvariantCulture);
+            }
+
+            if (match.Groups["today"].Success)
+            {
+                var days = match.Groups["n"].Success
+                    ? int.Parse(match.Groups["n"].Value, CultureInfo.InvariantCulture)
+                        * (match.Groups["sign"].Value == "-" ? -1 : 1)
+                    : 0;
+
+                return now.Date.AddDays(days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
+
+            var name = match.Groups["name"].Value.Trim();
+
+            return variables is not null && variables.TryGetValue(name, out var value)
+                ? value ?? string.Empty
+                : string.Empty;
+        });
+    }
+
+    // The offset is at most five digits so it can neither overflow int.Parse nor AddDays;
+    // a longer one does not match and passes through literally like any unknown token.
+    [GeneratedRegex(
+        @"\{(?:(?<actor>actor)|(?<now>now)|(?<today>today)(?:(?<sign>[+-])(?<n>\d{1,5})d)?|var:(?<name>[^}]+))\}",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex ContextToken();
 }

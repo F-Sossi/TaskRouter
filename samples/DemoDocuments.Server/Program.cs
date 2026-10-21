@@ -69,6 +69,9 @@ builder.Services.AddTaskRouterFor<DemoDbContext>()
     // Escalation is host code by design -- the engine raises TaskOverdue and has no
     // notion of who is above whom. This walks the demo's own org chart.
     .AddTrigger<DemoEscalationTrigger>()
+    // The fields authors may set on a document and its work items. Declared once, here,
+    // so the builder only ever offers fields this host has code behind.
+    .AddWorkflowFields(DemoWorkflowFields.Configure)
     // Deadlines come from the document the run is about. Without this the engine stamps
     // null dates and the whole feature is inert.
     .AddDueDateResolver<DemoDueDateResolver>()

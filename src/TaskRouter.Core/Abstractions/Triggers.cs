@@ -15,7 +15,26 @@ public interface IWorkflowTrigger
     TriggerDescriptor Describe();
 
     Task ExecuteAsync(WorkflowTriggerContext context, CancellationToken ct = default);
+
+    /// <summary>
+    /// What this trigger would do, in one sentence for the person about to cause it: the
+    /// runner shows it before a step is completed. The context is what
+    /// <see cref="ExecuteAsync"/> would get, with <see cref="WorkflowTriggerContext.Preview"/>
+    /// set; nothing may be changed.
+    ///
+    /// <para>Null shows the trigger's display name. An empty string shows nothing, for
+    /// bookkeeping nobody needs to be told about.</para>
+    /// </summary>
+    Task<string?> DescribeActionAsync(WorkflowTriggerContext context, CancellationToken ct = default) =>
+        Task.FromResult<string?>(null);
 }
+
+/// <summary>Set on a trigger context that is only being described, never executed.</summary>
+/// <param name="NextTasks">
+/// The steps the completion would create, as they would be assigned. They do not exist yet,
+/// so their ids are zero.
+/// </param>
+public sealed record TriggerPreview(IReadOnlyList<WorkflowTaskSnapshot> NextTasks);
 
 public sealed record TriggerDescriptor(
     string Key,
@@ -25,7 +44,18 @@ public sealed record TriggerDescriptor(
     IReadOnlyList<TriggerParameter> Parameters,
     TriggerDispatchMode DefaultDispatch = TriggerDispatchMode.InTransaction,
     TriggerFailurePolicy DefaultFailurePolicy = TriggerFailurePolicy.LogAndContinue,
-    Type? CustomEditorComponent = null);
+    Type? CustomEditorComponent = null,
+    // Appended, so positional construction elsewhere keeps compiling. Null means every
+    // mode. The builder narrows it to what this host can run: without outbox processing an
+    // after-commit or background trigger is queued and never picked up.
+    IReadOnlyList<TriggerDispatchMode>? DispatchModes = null,
+    // The longer explanation behind the builder's info button. The host can add its own
+    // sections (WorkflowBuilderOptions.TriggerHelp), for what only it knows: where a value
+    // ends up, what it rolls up into.
+    IReadOnlyList<TriggerHelpSection>? Help = null);
+
+/// <summary>A titled list of points in a trigger's help: "What it does", "Things to know".</summary>
+public sealed record TriggerHelpSection(string Heading, IReadOnlyList<string> Points);
 
 public sealed record TriggerParameter(
     string Name,
@@ -34,7 +64,56 @@ public sealed record TriggerParameter(
     bool Required = false,
     string? DefaultValue = null,
     IReadOnlyList<string>? Choices = null,
-    string? HelpText = null);
+    string? HelpText = null,
+    // Appended, so positional construction elsewhere keeps compiling.
+    IReadOnlyList<TriggerChoice>? Options = null,
+    TriggerParameterCondition? ShownWhen = null)
+{
+    /// <summary>
+    /// The values a <see cref="TriggerParameterKind.Choice"/> accepts: <see cref="Options"/>
+    /// when given, which carry a label and description each, otherwise <see cref="Choices"/>.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedValues => Options?.Select(o => o.Value).ToList() ?? Choices;
+
+    /// <summary>
+    /// Whether this parameter applies, given the rest of the configuration. One that does
+    /// not is neither shown nor checked: "Recipient" is only asked for when "Send to" is
+    /// "A specific person".
+    /// </summary>
+    public bool AppliesTo(IReadOnlyDictionary<string, string?> configuration, IReadOnlyList<TriggerParameter> siblings)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(siblings);
+
+        if (ShownWhen is null)
+        {
+            return true;
+        }
+
+        var value = configuration.TryGetValue(ShownWhen.Parameter, out var set) && !string.IsNullOrWhiteSpace(set)
+            ? set
+            : siblings.FirstOrDefault(s => s.Name == ShownWhen.Parameter)?.DefaultValue;
+
+        return string.Equals(value, ShownWhen.Value, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>One choice of a <see cref="TriggerParameterKind.Choice"/> parameter.</summary>
+/// <param name="Value">What is stored.</param>
+/// <param name="Label">What the author picks it by.</param>
+/// <param name="Description">A sentence saying what it means; shown under the label.</param>
+/// <param name="Events">
+/// The only events the choice works on, or null for any. The builder offers it only on those,
+/// and refuses to publish a trigger that picked it on another.
+/// </param>
+public sealed record TriggerChoice(
+    string Value,
+    string Label,
+    string? Description = null,
+    IReadOnlyList<WorkflowEventKind>? Events = null);
+
+/// <summary>A parameter applies only while <paramref name="Parameter"/> is set to <paramref name="Value"/>.</summary>
+public sealed record TriggerParameterCondition(string Parameter, string Value);
 
 /// <summary>Typed access to a trigger's stored JSON configuration.</summary>
 public interface ITriggerConfig
@@ -103,4 +182,24 @@ public sealed class WorkflowTriggerContext
 
     /// <summary>Host-side resolution for triggers that need domain services.</summary>
     public IServiceProvider? Services { get; init; }
+
+    /// <summary>
+    /// Non-null when the trigger is being asked what it would do, through
+    /// <see cref="IWorkflowTrigger.DescribeActionAsync"/>, rather than run.
+    /// </summary>
+    public TriggerPreview? Preview { get; init; }
+
+    /// <summary>
+    /// What this execution should record about itself. A fresh one per trigger execution;
+    /// the dispatcher copies <see cref="TriggerExecutionReport.Detail"/> onto the
+    /// execution row whether the trigger succeeds or throws.
+    /// </summary>
+    public TriggerExecutionReport Report { get; } = new();
+}
+
+/// <summary>What a trigger wants recorded about what it did.</summary>
+public sealed class TriggerExecutionReport
+{
+    /// <summary>Free text stored on the execution row; null reports nothing.</summary>
+    public string? Detail { get; set; }
 }

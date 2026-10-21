@@ -598,6 +598,13 @@ public class TriggerExecution : WorkflowEntity
 
     public TriggerExecutionStatus Status { get; set; } = TriggerExecutionStatus.Pending;
     public string? Error { get; set; }
+
+    /// <summary>
+    /// What the trigger reports it did, beyond succeeding or failing — for a field update,
+    /// each change as "before → after". Null for triggers that report nothing.
+    /// </summary>
+    public string? Detail { get; set; }
+
     public int Attempt { get; set; } = 1;
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }

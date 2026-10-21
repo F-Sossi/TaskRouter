@@ -1,0 +1,267 @@
+@using TaskRouter.Core.Builder
+@using TaskRouter.Core.Fields
+@inject IWorkflowBuilderClient Client
+
+@*
+    Edits a field-update trigger: one target, then field = value rows. The value control
+    follows the field's kind, so an author picks "On Hold" from a list rather than typing
+    an enum member name. Text and date fields also take tokens ({actor}, {today+5d}).
+
+    All the state lives in SubjectFieldsEditModel, where a unit test can reach it; this is
+    only its skin.
+*@
+
+@if (string.IsNullOrWhiteSpace(SubjectType))
+{
+    <MudAlert Severity="Severity.Warning" Dense="true">
+        Choose what this workflow applies to (its subject type) before updating fields.
+    </MudAlert>
+}
+else if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Dense="true">@_loadError</MudAlert>
+}
+else if (_model is null)
+{
+    <MudProgressLinear Indeterminate="true" aria-label="Loading fields" />
+}
+else if (_model.Targets.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Dense="true">
+        This application has no fields a workflow may set on a @SubjectType.
+    </MudAlert>
+}
+else
+{
+    <MudStack Spacing="2">
+        <MudSelect T="string" Label="Target" Value="_model.TargetKey" ValueChanged="SelectTargetAsync"
+                   Variant="Variant.Outlined" Dense="true">
+            @foreach (var target in _model.Targets)
+            {
+                <MudSelectItem T="string" Value="@target.Key">@target.Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        @if (_model.Target is not null)
+        {
+            @for (var i = 0; i < _model.Rows.Count; i++)
+            {
+                var index = i;
+                var row = _model.Rows[index];
+                var field = row.Field;
+
+                <MudStack @key="row" Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudSelect T="string" Label="Field" Value="row.StoredKey" Dense="true" Style="min-width: 12rem"
+                               Variant="Variant.Outlined"
+                               ValueChanged="@(key => SetFieldAsync(index, key))">
+                        @if (field is null && row.StoredKey is not null)
+                        {
+                            <MudSelectItem T="string" Value="@row.StoredKey">@row.StoredKey (no longer available)</MudSelectItem>
+                        }
+                        @foreach (var available in _model.AvailableFields(index))
+                        {
+                            <MudSelectItem T="string" Value="@available.Key">@available.Label</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudText aria-hidden="true">=</MudText>
+
+                    @switch (field?.Kind)
+                    {
+                        case FieldKind.Choice:
+                            <MudSelect T="string" Label="Value" Value="row.Value" Dense="true" Clearable="@field.IsNullable"
+                                       Variant="Variant.Outlined"
+                                       ValueChanged="@(v => SetValueAsync(row, v))">
+                                @foreach (var choice in field.Choices)
+                                {
+                                    <MudSelectItem T="string" Value="@choice.Value">@choice.Label</MudSelectItem>
+                                }
+                            </MudSelect>
+                            break;
+
+                        case FieldKind.Boolean:
+                            <MudSwitch T="bool" Label="Value" Color="Color.Primary"
+                                       Value="@(bool.TryParse(row.Value, out var on) && on)"
+                                       ValueChanged="@(v => SetValueAsync(row, v ? "true" : "false"))" />
+                            break;
+
+                        case FieldKind.Actor:
+                        case FieldKind.Lookup:
+                            @* Debounced: a search may load the host's whole directory each call. *@
+                            <MudAutocomplete T="string" Label="Value" Value="row.Value" Dense="true"
+                                             Variant="Variant.Outlined"
+                                             DebounceInterval="300" MaxItems="MaxShown"
+                                             Clearable="@field.IsNullable"
+                                             CoerceValue="@(field.Kind == FieldKind.Actor)"
+                                             SearchFunc="@((text, ct) => SearchAsync(row, text, ct))"
+                                             ToStringFunc="@(v => Label(field.Key, v))"
+                                             ValueChanged="@(v => SetValueAsync(row, v))"
+                                             HelperText="@(field.Kind == FieldKind.Actor ? "Or {actor} or {task.assignee}" : null)">
+                                <NoItemsTemplate>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary px-4 py-2">
+                                        No matches
+                                    </MudText>
+                                </NoItemsTemplate>
+                            </MudAutocomplete>
+                            break;
+
+                        case FieldKind.Date:
+                            <MudTextField T="string" Label="Value" Value="row.Value" Dense="true"
+                                          Variant="Variant.Outlined"
+                                          HelperText="2026-10-20, or {today}, {today+5d}, {now}"
+                                          ValueChanged="@(v => SetValueAsync(row, v))" />
+                            break;
+
+                        case null:
+                            <MudTextField T="string" Label="Value" Value="row.Value" Dense="true"
+                                          Variant="Variant.Outlined" Disabled="true" />
+                            break;
+
+                        default:
+                            <MudTextField T="string" Label="Value" Value="row.Value" Dense="true"
+                                          Variant="Variant.Outlined"
+                                          HelperText="@(field.Kind == FieldKind.Number ? "A number, or {var:name}" : "May use {actor}, {today}, {var:name}")"
+                                          ValueChanged="@(v => SetValueAsync(row, v))" />
+                            break;
+                    }
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                   aria-label="@($"Remove {field?.Label ?? row.StoredKey ?? "empty row"}")" OnClick="@(() => RemoveRowAsync(index))" />
+                </MudStack>
+            }
+
+            <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Text" Size="Size.Small"
+                       Disabled="@(_model.AvailableFields(_model.Rows.Count).Count == 0)"
+                       OnClick="AddRowAsync">
+                Add field
+            </MudButton>
+        }
+    </MudStack>
+}
+
+@code {
+    /// <summary>The most options a host search returns, so all of them are listed.</summary>
+    private const int MaxShown = 20;
+
+    [Parameter] public string? SubjectType { get; set; }
+    [Parameter] public Dictionary<string, string?> Configuration { get; set; } = [];
+    [Parameter] public EventCallback<Dictionary<string, string?>> ConfigurationChanged { get; set; }
+
+    private SubjectFieldsEditModel? _model;
+    private string? _loadedFor;
+    private string? _loadError;
+
+    /// <summary>Names for option values, by "field|value", as searches have returned them.</summary>
+    private readonly Dictionary<string, string> _labels = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrWhiteSpace(SubjectType) || SubjectType == _loadedFor)
+        {
+            return;
+        }
+
+        var requested = SubjectType;
+        _loadedFor = requested;
+        _model = null;
+        _loadError = null;
+
+        IReadOnlyList<SubjectTargetInfo> targets;
+
+        try
+        {
+            targets = await Client.GetSubjectFieldsAsync(requested);
+        }
+        catch (Exception)
+        {
+            // Everything, cancellation included: nothing here cancels the load, so a
+            // TaskCanceledException is an HttpClient timeout, and letting it escape a
+            // lifecycle method would end the author's Blazor Server session.
+            if (_loadedFor == requested)
+            {
+                // Forget this subject type so the next parameter set tries again.
+                _loadedFor = null;
+                _loadError = "Could not load this subject type's fields.";
+            }
+
+            return;
+        }
+
+        // The subject type changed while this was loading; a newer load owns the editor now.
+        if (_loadedFor != requested)
+        {
+            return;
+        }
+
+        _model = SubjectFieldsEditModel.Load(targets, Configuration);
+
+        // Load picks the only target when none is stored; store it, so saving without
+        // touching the editor saves the target the author is looking at.
+        if (_model.TargetKey is not null
+            && Configuration.GetValueOrDefault(SubjectFieldsEditModel.TargetKeyName) is null)
+        {
+            await SaveAsync();
+        }
+    }
+
+    private async Task<IEnumerable<string>> SearchAsync(
+        SubjectFieldsEditModel.Row row, string? text, CancellationToken ct)
+    {
+        var field = row.Field!.Key;
+
+        // Opening the list with something already picked passes that pick's name as the
+        // text, which would narrow the list to the one thing already chosen.
+        if (row.Value is not null && text == Label(field, row.Value))
+        {
+            text = null;
+        }
+
+        var options = await Client.SearchFieldOptionsAsync(SubjectType!, _model!.TargetKey!, field, text, ct);
+
+        foreach (var option in options)
+        {
+            _labels[$"{field}|{option.Value}"] = option.Label;
+        }
+
+        return options.Select(o => o.Value);
+    }
+
+    private string Label(string field, string? value) =>
+        value is null ? string.Empty : _labels.GetValueOrDefault($"{field}|{value}", value);
+
+    private Task SelectTargetAsync(string? key)
+    {
+        _model!.SelectTarget(key);
+        return SaveAsync();
+    }
+
+    private Task SetFieldAsync(int index, string? key)
+    {
+        _model!.SetField(index, key);
+        return SaveAsync();
+    }
+
+    private Task SetValueAsync(SubjectFieldsEditModel.Row row, string? value)
+    {
+        row.Value = value;
+        return SaveAsync();
+    }
+
+    private Task AddRowAsync()
+    {
+        _model!.AddRow();
+        return SaveAsync();
+    }
+
+    private Task RemoveRowAsync(int index)
+    {
+        _model!.RemoveRow(index);
+        return SaveAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        _model!.WriteTo(Configuration);
+        await ConfigurationChanged.InvokeAsync(Configuration);
+    }
+}

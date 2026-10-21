@@ -212,4 +212,29 @@ public class HttpBuilderClientTests
 
         mine.Dispose();
     }
+
+    [TestMethod]
+    public async Task Subject_fields_round_trip()
+    {
+        var targets = await _client.GetSubjectFieldsAsync("ChangeRequest");
+
+        Assert.AreEqual("document", targets[0].Key);
+        var status = targets[0].Fields.Single(f => f.Key == "Status");
+        Assert.AreEqual(TaskRouter.Core.Fields.FieldKind.Choice, status.Kind,
+            "Enums nested inside records are the first thing a careless serializer flattens.");
+        Assert.IsNotEmpty(status.Choices);
+    }
+
+    [TestMethod]
+    public async Task Field_options_round_trip_and_escape_the_search()
+    {
+        var odd = await _client.SearchFieldOptionsAsync(
+            "ChangeRequest", "document", "CogCoordinatorActorId", "a b&c");
+        Assert.IsNotNull(odd);
+
+        // A term that matches exactly one demo person proves the query string arrived intact.
+        var casey = await _client.SearchFieldOptionsAsync(
+            "ChangeRequest", "document", "CogCoordinatorActorId", "Casey");
+        Assert.HasCount(1, casey);
+    }
 }

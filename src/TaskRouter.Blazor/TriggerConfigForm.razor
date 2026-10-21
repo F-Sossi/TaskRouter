@@ -1,5 +1,7 @@
 @using TaskRouter.Core.Abstractions
+@using TaskRouter.Core.Builder
 @using TaskRouter.Core.Model
+@inject IWorkflowBuilderClient Client
 
 @*
     Renders a configuration form from a trigger's declared parameters.
@@ -30,7 +32,7 @@ else if (Descriptor.Parameters.Count == 0)
 else
 {
     <MudStack Spacing="3">
-        @foreach (var p in Descriptor.Parameters)
+        @foreach (var p in Descriptor.Parameters.Where(p => p.AppliesTo(Configuration, Descriptor.Parameters)))
         {
             @switch (p.Kind)
             {
@@ -60,6 +62,28 @@ else
                                      HelperText="@p.HelpText"
                                      Required="p.Required"
                                      Variant="Variant.Outlined" />
+                    break;
+
+                case TriggerParameterKind.Choice when p.Options is not null:
+                    <MudSelect T="string"
+                               Value="@Get(p)"
+                               ValueChanged="@(v => Set(p, v))"
+                               Label="@Label(p)"
+                               HelperText="@(p.HelpText ?? p.Options.FirstOrDefault(o => o.Value == Get(p))?.Description)"
+                               ToStringFunc="@(v => p.Options.FirstOrDefault(o => o.Value == v)?.Label ?? v)"
+                               Required="p.Required"
+                               Variant="Variant.Outlined">
+                        @foreach (var option in OptionsHere(p))
+                        {
+                            <MudSelectItem T="string" Value="@option.Value">
+                                <div>@option.Label</div>
+                                @if (option.Description is not null)
+                                {
+                                    <div class="mud-text-secondary" style="font-size:0.8rem;white-space:normal">@option.Description</div>
+                                }
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
                     break;
 
                 case TriggerParameterKind.Choice:
@@ -119,6 +143,31 @@ else
                     </MudSelect>
                     break;
 
+                case TriggerParameterKind.Actor:
+                    <MudAutocomplete T="string"
+                                     Value="@Get(p)"
+                                     ValueChanged="@(v => Set(p, v))"
+                                     Label="@Label(p)"
+                                     HelperText="@(p.HelpText ?? "Type a name to search.")"
+                                     Required="p.Required"
+                                     Clearable="true"
+                                     DebounceInterval="300"
+                                     MaxItems="25"
+                                     SearchFunc="@SearchPeopleAsync"
+                                     ToStringFunc="@PersonName"
+                                     Variant="Variant.Outlined" />
+                    break;
+
+                case TriggerParameterKind.FieldTarget:
+                    @* One editor owns both the target and the assignments parameters. *@
+                    <SubjectFieldsEditor SubjectType="@SubjectType"
+                                         Configuration="Configuration"
+                                         ConfigurationChanged="ConfigurationChanged" />
+                    break;
+
+                case TriggerParameterKind.FieldAssignments:
+                    break;
+
                 default:
                     <MudTextField T="string"
                                   Value="@Get(p)"
@@ -147,6 +196,46 @@ else
         = new Dictionary<string, string>();
 
     [Parameter] public IReadOnlyList<string> RoleOptions { get; set; } = [];
+
+    /// <summary>The workflow's subject type — what a field-update trigger's fields depend on.</summary>
+    [Parameter] public string? SubjectType { get; set; }
+
+    /// <summary>The event the trigger fires on, which some choices are limited to.</summary>
+    [Parameter] public WorkflowEventKind? Event { get; set; }
+
+    // Display names of people found so far, so a picked id shows as a name.
+    private readonly Dictionary<string, string> _people = new(StringComparer.Ordinal);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // A saved person arrives as an id; look it up once so the picker shows their name.
+        foreach (var p in Descriptor?.Parameters.Where(p => p.Kind == TriggerParameterKind.Actor) ?? [])
+        {
+            if (Get(p) is { Length: > 0 } id && !_people.ContainsKey(id))
+            {
+                await SearchPeopleAsync(id, CancellationToken.None);
+            }
+        }
+    }
+
+    /// <summary>The choices that work on this event, plus whatever is already picked.</summary>
+    private IEnumerable<TriggerChoice> OptionsHere(TriggerParameter p) =>
+        p.Options!.Where(o => o.Events is null || Event is null || o.Events.Contains(Event.Value) || o.Value == Get(p));
+
+    private async Task<IEnumerable<string>> SearchPeopleAsync(string? text, CancellationToken ct)
+    {
+        var found = await Client.SearchActorsAsync(text, ct);
+
+        foreach (var person in found)
+        {
+            _people[person.ActorId] = person.DisplayName;
+        }
+
+        return found.Select(a => a.ActorId);
+    }
+
+    private string PersonName(string? id) =>
+        id is null ? string.Empty : _people.TryGetValue(id, out var name) ? $"{name} ({id})" : id;
 
     private static string Label(TriggerParameter p) => p.Required ? $"{p.Label} *" : p.Label;
 

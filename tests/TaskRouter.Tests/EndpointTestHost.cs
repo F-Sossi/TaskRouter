@@ -99,6 +99,8 @@ public sealed class EndpointTestHost : IAsyncDisposable
             // rejects a workflow whose trigger keys are not registered, so a fixture
             // missing this fails on the seeded workflow rather than on anything a test did.
             .AddTrigger<DemoEscalationTrigger>()
+            // Mirrors Program.cs, so the field-update trigger is in the registry.
+            .AddWorkflowFields(DemoWorkflowFields.Configure)
             // The builder endpoints are mapped by MapTaskRouterEndpoints whether or not a
             // host registers this, so the fixture registers it -- see
             // BuilderEndpointTests.A_host_that_never_adopted_the_builder_still_starts for
@@ -120,6 +122,13 @@ public sealed class EndpointTestHost : IAsyncDisposable
             EntityFrameworkCore.Builder.IWorkflowEditorActorAccessor, TestEditorActorAccessor>();
 
         builder.Services.AddTaskRouterEndpoints();
+
+        // The demo runs the outbox and the deadline sweep, and the builder offers
+        // after-commit dispatch and deadline events only where something does. Their option
+        // singletons are what it looks for, so the fixture registers those and not the
+        // hosted services: the seeded workflow publishes, and nothing sweeps under a test.
+        builder.Services.AddSingleton(new EntityFrameworkCore.Triggers.WorkflowOutboxOptions());
+        builder.Services.AddSingleton(new EntityFrameworkCore.Triggers.WorkflowDeadlineOptions());
 
         // Last, so a test can override any of the above.
         configure?.Invoke(builder.Services);

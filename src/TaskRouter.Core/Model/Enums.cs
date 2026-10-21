@@ -148,7 +148,13 @@ public enum TriggerParameterKind
     RoleRef,
     VariableRef,
     Url,
-    Template
+    Template,
+    /// <summary>A target from the host's field catalog for the workflow's subject type.</summary>
+    FieldTarget,
+    /// <summary>A JSON list of field assignments against the configured target.</summary>
+    FieldAssignments,
+    /// <summary>A person, by actor id, picked from the host's directory.</summary>
+    Actor
 }
 
 public enum VariableType

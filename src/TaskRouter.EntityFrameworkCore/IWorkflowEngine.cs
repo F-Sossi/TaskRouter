@@ -65,6 +65,34 @@ public interface IWorkflowEngine
         string? notes = null,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// What <see cref="CompleteTaskAsync"/> with this outcome would set off, without doing
+    /// it: the task's own "completed" (and, on a branch, "branch completed") triggers, and the
+    /// "reached" triggers of the steps the outcome routes to, as those steps would be
+    /// assigned. Route and trigger conditions are applied as the completion would apply them.
+    ///
+    /// <para>A preview, not a promise: anything that changes between now and the completion
+    /// — another branch finishing, a variable set, a reassignment — can change the answer.</para>
+    /// </summary>
+    Task<Result<IReadOnlyList<Core.Runner.PlannedAction>>> GetCompletionPreviewAsync(
+        int taskId,
+        string outcomeKey,
+        string actorId,
+        CancellationToken ct = default) =>
+        Task.FromResult(Result<IReadOnlyList<Core.Runner.PlannedAction>>.Ok([]));
+
+    /// <summary>
+    /// <see cref="GetCompletionPreviewAsync"/> for <see cref="CompleteWithSelectiveRejectionAsync"/>,
+    /// which raises different events and creates different steps.
+    /// </summary>
+    Task<Result<IReadOnlyList<Core.Runner.PlannedAction>>> GetSelectiveRejectionPreviewAsync(
+        int convergenceTaskId,
+        string outcomeKey,
+        IReadOnlyList<string> rejectedBranchKeys,
+        string actorId,
+        CancellationToken ct = default) =>
+        Task.FromResult(Result<IReadOnlyList<Core.Runner.PlannedAction>>.Ok([]));
+
     Task<Result<Unit>> CancelTaskAsync(
         int taskId,
         string actorId,

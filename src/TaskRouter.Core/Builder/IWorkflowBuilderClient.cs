@@ -1,4 +1,5 @@
 using TaskRouter.Core.Abstractions;
+using TaskRouter.Core.Fields;
 using TaskRouter.Core.Validation;
 
 namespace TaskRouter.Core.Builder;
@@ -80,6 +81,26 @@ public interface IWorkflowBuilderClient
     /// and the builder offers a free-text field instead of a list.
     /// </summary>
     Task<IReadOnlyList<string>> GetSubjectTypesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// The targets and fields a field-update trigger may set on a workflow of this subject
+    /// type. Empty when the host declares none.
+    /// </summary>
+    Task<IReadOnlyList<SubjectTargetInfo>> GetSubjectFieldsAsync(
+        string subjectType, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<SubjectTargetInfo>>([]);
+
+    /// <summary>Options for an actor or lookup field, narrowed by what the author has typed.</summary>
+    Task<IReadOnlyList<FieldChoice>> SearchFieldOptionsAsync(
+        string subjectType, string target, string field, string? search, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<FieldChoice>>([]);
+
+    /// <summary>
+    /// People from the host's directory whose name or id contains <paramref name="search"/>,
+    /// for a trigger's person picker. Empty when the host has no directory.
+    /// </summary>
+    Task<IReadOnlyList<ActorOption>> SearchActorsAsync(string? search, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ActorOption>>([]);
 
     /// <summary>Route condition keys the host has registered.</summary>
     Task<IReadOnlyList<string>> GetRouteConditionsAsync(CancellationToken ct = default);

@@ -595,62 +595,18 @@ public sealed partial class WorkflowEngine(
             return;
         }
 
-        // The sweeper and the trigger dispatcher act under this id. The bypass lives here
-        // rather than in every host's policy because a host that forgot it would break its
-        // own deadline sweep, and the symptom would be tasks quietly not escalating.
-        //
-        // Hosts must never let this id arrive from an untrusted caller: it is checked
-        // before the policy is consulted, so a request that supplies it is ungated.
-        if (actorId == WorkflowActors.System)
-        {
-            return;
-        }
-
+        // The system-actor bypass, the fail-closed handling of a throwing policy and the
+        // null-result guard live in WorkflowAuthorization, shared with the field-update
+        // trigger so the two cannot drift apart.
         var context = new WorkflowAuthorizationContext(
             actorId,
             task?.ToSnapshot(),
             subject,
             workflowDefinitionId);
 
-        WorkflowAuthorizationResult result;
-
-        try
-        {
-            result = await authorizationPolicy
-                .EvaluateAsync(operation, context, ct)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (
-            ex is not OperationCanceledException and not WorkflowAuthorizationException)
-        {
-            // Fail closed. See IWorkflowAuthorizationPolicy: this is the opposite of the
-            // rule the resolver seams document, and deliberately so.
-            //
-            // Two exclusions, neither of which weakens that. Cancellation is not a policy
-            // failure, and reporting it as a denial would tell a host mapping this to 403
-            // that an aborted request was forbidden. A policy that throws
-            // WorkflowAuthorizationException has already said precisely why, and wrapping
-            // it would replace that reason with a vaguer one. Both still abort the
-            // transaction, so nothing proceeds ungated either way.
-            //
-            // The cause lives in this log line and not on the exception: the Result
-            // carries a stable message for the host to show a user, and the stack trace
-            // is a server-side concern.
-            logger.LogError(
-                ex,
-                "Authorization policy threw evaluating {Operation} for actor {ActorId}; denying.",
-                operation,
-                actorId);
-
-            throw new WorkflowAuthorizationException(
-                operation, actorId, "the authorization policy failed");
-        }
-
-        if (result is null || !result.IsAllowed)
-        {
-            throw new WorkflowAuthorizationException(
-                operation, actorId, result?.Reason ?? "not permitted");
-        }
+        await WorkflowAuthorization
+            .EnsureAllowedAsync(authorizationPolicy, operation, context, logger, ct)
+            .ConfigureAwait(false);
     }
 
     private async Task ValidateCompletableAsync(
