@@ -55,4 +55,61 @@ internal static class TriggerSelection
                 : events[0];
         }
     }
+
+    /// <summary>
+    /// Clears what <paramref name="changed"/> just hid: switching "Send to" away from "A
+    /// specific person" drops the person, so switching back starts empty rather than
+    /// resurrecting a choice the author had abandoned.
+    ///
+    /// <para>Only parameters shown by the one that changed. A trigger saved before "Send to"
+    /// existed has a recipient and no "Send to", and its recipient is what it sends to;
+    /// editing its subject must not throw that away.</para>
+    /// </summary>
+    public static void ClearHidden(
+        Dictionary<string, string?> configuration, TriggerDescriptor descriptor, string changed)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        foreach (var p in descriptor.Parameters)
+        {
+            if (string.Equals(p.ShownWhen?.Parameter, changed, StringComparison.OrdinalIgnoreCase)
+                && !p.AppliesTo(configuration, descriptor.Parameters))
+            {
+                configuration.Remove(p.Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The required parameters left blank, checked the way the server checks them: a
+    /// parameter that is not shown is not asked for, and a default counts as an answer.
+    /// </summary>
+    public static IReadOnlyList<string> MissingRequired(
+        IReadOnlyDictionary<string, string?> configuration, TriggerDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        var missing = new List<string>();
+
+        foreach (var p in descriptor.Parameters.Where(p => p.Required))
+        {
+            if (!p.AppliesTo(configuration, descriptor.Parameters))
+            {
+                continue;
+            }
+
+            var value = configuration.TryGetValue(p.Name, out var v) && !string.IsNullOrWhiteSpace(v)
+                ? v
+                : p.DefaultValue;
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                missing.Add($"'{p.Label}' is required.");
+            }
+        }
+
+        return missing;
+    }
 }

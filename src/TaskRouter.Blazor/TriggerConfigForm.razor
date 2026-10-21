@@ -251,6 +251,12 @@ else
     private async Task Set(TriggerParameter p, string? value)
     {
         Configuration[p.Name] = value;
+
+        if (Descriptor is not null)
+        {
+            TriggerSelection.ClearHidden(Configuration, Descriptor, p.Name);
+        }
+
         await ConfigurationChanged.InvokeAsync(Configuration);
     }
 }

@@ -1315,7 +1315,8 @@ public sealed class EfWorkflowBuilderClient(
                         TriggerKey = t.TriggerKey,
                         Event = t.Event,
                         CustomEventName = t.CustomEventName,
-                        Configuration = new Dictionary<string, string?>(TriggerConfig.Parse(t.Configuration).All),
+                        Configuration = NotifyTrigger.WithSendTo(
+                            t.TriggerKey, new Dictionary<string, string?>(TriggerConfig.Parse(t.Configuration).All)),
                         Condition = t.Condition,
                         Order = t.Order,
                         IsActive = t.IsActive,

@@ -4,9 +4,11 @@ using Microsoft.EntityFrameworkCore;
 using DemoDocuments.Server.Domain;
 using DemoDocuments.Server.Workflow;
 
+using TaskRouter.Blazor;
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
 using TaskRouter.Core.Model;
+using TaskRouter.EntityFrameworkCore.Builder;
 using TaskRouter.EntityFrameworkCore.Triggers;
 
 namespace TaskRouter.Tests;
@@ -158,6 +160,71 @@ public class NotifyRecipientTests
             "'Person' is required.");
         Assert.IsEmpty(TriggerConfig.Validate(descriptor, """{"sendTo":"nextAssignee","subject":"s","body":"b"}"""));
         Assert.IsNotEmpty(TriggerConfig.Validate(descriptor, """{"sendTo":"everyone","subject":"s","body":"b"}"""));
+    }
+
+    /// <summary>
+    /// The builder's own check on Save. It asked for every required parameter, shown or not,
+    /// so any "Send to" other than a specific person could not be saved for want of a person.
+    /// </summary>
+    [TestMethod]
+    public void The_builder_asks_for_a_person_only_when_sending_to_a_specific_person()
+    {
+        var descriptor = new NotifyTrigger().Describe();
+
+        foreach (var sendTo in new[] { "assignee", "nextAssignee", "starter", "actor" })
+        {
+            Assert.IsEmpty(TriggerSelection.MissingRequired(
+                new Dictionary<string, string?> { ["sendTo"] = sendTo, ["recipient"] = null, ["subject"] = "s", ["body"] = "b" },
+                descriptor), sendTo);
+        }
+
+        CollectionAssert.AreEqual(
+            new[] { "'Person' is required." },
+            TriggerSelection.MissingRequired(
+                new Dictionary<string, string?> { ["sendTo"] = "person", ["subject"] = "s", ["body"] = "b" },
+                descriptor).ToList());
+    }
+
+    [TestMethod]
+    public void Switching_away_from_a_specific_person_forgets_the_person()
+    {
+        var descriptor = new NotifyTrigger().Describe();
+        var configuration = new Dictionary<string, string?> { ["sendTo"] = "person", ["recipient"] = "user-lead-c200" };
+
+        configuration["sendTo"] = "assignee";
+        TriggerSelection.ClearHidden(configuration, descriptor, "sendTo");
+
+        Assert.IsFalse(configuration.ContainsKey("recipient"));
+    }
+
+    [TestMethod]
+    public void Editing_an_older_trigger_keeps_its_person()
+    {
+        var descriptor = new NotifyTrigger().Describe();
+        var configuration = new Dictionary<string, string?> { ["recipient"] = "user-lead-c200", ["subject"] = "s" };
+
+        configuration["subject"] = "changed";
+        TriggerSelection.ClearHidden(configuration, descriptor, "subject");
+
+        Assert.AreEqual("user-lead-c200", configuration["recipient"]);
+    }
+
+    [TestMethod]
+    public async Task An_older_trigger_opens_in_the_builder_as_sending_to_its_person()
+    {
+        var entry = await StartWithNotifyAsync(WorkflowEventKind.TaskCompleted, """{"recipient":"user-lead-c200"}""");
+        var versionId = await _host.Db.WorkflowTasks
+            .Where(t => t.Id == entry).Select(t => t.TaskDefinition!.WorkflowDefinitionVersionId).SingleAsync();
+
+        var client = new EfWorkflowBuilderClient(
+            _host.Db, new WorkflowTriggerRegistry([new NotifyTrigger()]), [], new WorkflowBuilderOptions(),
+            new TestEditorActorAccessor());
+
+        var model = await client.GetWorkflowAsync(versionId);
+        var notify = model!.Tasks.SelectMany(t => t.Triggers).Single(t => t.TriggerKey == BuiltInTriggerKeys.Notify && t.Order == 99);
+
+        Assert.AreEqual("person", notify.Configuration["sendTo"]);
+        Assert.AreEqual("user-lead-c200", notify.Configuration["recipient"]);
     }
 
     [TestMethod]

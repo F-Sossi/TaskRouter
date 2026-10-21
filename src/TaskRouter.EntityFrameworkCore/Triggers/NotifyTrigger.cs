@@ -35,6 +35,23 @@ public sealed class NotifyTrigger(IWorkflowDbContext? db = null, IWorkflowActorR
 
     public string Key => BuiltInTriggerKeys.Notify;
 
+    /// <summary>
+    /// Fills in "Send to" for a trigger saved before it existed, as the trigger reads it when it
+    /// runs: a recipient means that person. Without it the builder shows such a trigger as
+    /// "Person assigned this step" with the person hidden, while it goes on sending to them.
+    /// </summary>
+    internal static Dictionary<string, string?> WithSendTo(string triggerKey, Dictionary<string, string?> configuration)
+    {
+        if (string.Equals(triggerKey, BuiltInTriggerKeys.Notify, StringComparison.OrdinalIgnoreCase)
+            && (!configuration.TryGetValue("sendTo", out var sendTo) || string.IsNullOrWhiteSpace(sendTo))
+            && configuration.TryGetValue("recipient", out var recipient) && !string.IsNullOrWhiteSpace(recipient))
+        {
+            configuration["sendTo"] = SendTo.Person;
+        }
+
+        return configuration;
+    }
+
     public TriggerDescriptor Describe() => new(
         Key,
         "Send Notification",

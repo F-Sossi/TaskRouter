@@ -270,14 +270,7 @@
 
         // Validated here so a misconfigured trigger is rejected in the builder rather
         // than failing when it eventually fires.
-        foreach (var p in descriptor.Parameters.Where(p => p.Required))
-        {
-            var value = _edit.Configuration.TryGetValue(p.Name, out var v) ? v : p.DefaultValue;
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                _errors.Add($"'{p.Label}' is required.");
-            }
-        }
+        _errors.AddRange(TriggerSelection.MissingRequired(_edit.Configuration, descriptor));
 
         if (_edit.Event == WorkflowEventKind.Custom && string.IsNullOrWhiteSpace(_edit.CustomEventName))
         {
