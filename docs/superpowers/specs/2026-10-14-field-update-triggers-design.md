@@ -5,19 +5,19 @@
 ## Problem
 
 A workflow author cannot change anything on the document a workflow runs against. "When the
-review task completes, put this Misc Document On Hold" today means a host developer writing a
+review task completes, put this document On Hold" today means a host developer writing a
 C# `IWorkflowTrigger` for that one case. Triggers are code; authors can only configure the
 ones that exist.
 
 The goal is a trigger an author **builds** in the builder — pick a target, pick fields, give
 values — over a set of fields the host has deliberately exposed, with the host's rules
-(TRDIS's document and work-item state machines) still in force.
+(for example, a host's document and work-item state machines) still in force.
 
 ## Decisions taken
 
 | Question | Decision |
 |---|---|
-| What can be modified | The run's subject, plus related entities the host exposes. For TRDIS: the document, the work item for the task's section, and all work items on the document |
+| What can be modified | The run's subject, plus related entities the host exposes. For the first host: the document, the work item for the task's section, and all work items on the document |
 | What a value can be | A literal, or a string containing tokens (`{actor}`, `{today+5d}`, `{var:name}`, …) |
 | How the host declares fields | A fluent code catalog registered at startup (approach A). Not attributes, not an admin table |
 | When a write is refused | The trigger's existing `TriggerFailurePolicy`. This trigger defaults to `FailOperation` |
@@ -32,17 +32,17 @@ The catalog answers, per **subject type**: which **targets** exist, and which **
 target has. A target is a named way to get from a trigger context to zero or more entities.
 
 ```csharp
-services.AddTaskRouterFor<TRDISContext>()
+services.AddTaskRouterFor<AppDbContext>()
     .AddWorkflowFields(fields =>
     {
         // ---- every document type -------------------------------------------------------
         fields.ForSubjectTypes(DocumentSubjectTypes)
             .Target<DocumentBase>("document", "This document", Cardinality.One,
-                resolve: ctx => ctx.Db<TRDISContext>().Documents
+                resolve: ctx => ctx.Db<AppDbContext>().Documents
                                    .Where(d => d.Id == DocumentId(ctx.Subject)))
                 .Field(d => d.Status, "Status",
                     write: (doc, value, w) => w.Service<IDocumentService>()
-                                               .TransitionToAsync(doc, value, w.ModifierEdipi))
+                                               .TransitionToAsync(doc, value, w.ModifierId))
                 .Field(d => d.InternalDueDate, "Internal due date")
                 .Field(d => d.DueDate, "Due date")
                 .Field(d => d.Comments, "Comments")
@@ -53,7 +53,7 @@ services.AddTaskRouterFor<TRDISContext>()
                 resolve: ctx => WorkItemsOf(ctx)
                                    .Where(w => w.AssignedSectionId == SectionId(ctx.Task.AssignedBranchKey)))
                 .Field(w => w.WorkItemState, "State", write: WorkItemTransition)
-                .Field(w => w.CurrentlyAssignedEdipi, "Assigned to", FieldKind.Actor)
+                .Field(w => w.AssignedTo, "Assigned to", FieldKind.Actor)
                 .Field(w => w.InternalDueDate, "Internal due date")
                 .OnWritten((wi, w) => Stamp(wi, w))
 
@@ -63,16 +63,16 @@ services.AddTaskRouterFor<TRDISContext>()
                 .Field(w => w.InternalDueDate, "Internal due date")
                 .OnWritten((wi, w) => Stamp(wi, w));
 
-        // ---- LARs add their own fields to the same "document" target ------------------
-        fields.ForSubjectType("LiaisonActionRecord")
-            .Extend<LiaisonActionRecord>("document")
-                .Field(l => l.Urgency, "Urgency")
-                .Field(l => l.IsReplyRequired, "Reply required")
-                .Field(l => l.DateReplyRequiredBy, "Reply required by")
-                .Field(l => l.DateReplyReceived, "Reply received")
-                .Field(l => l.DateSent, "Date sent")
-                .Field(l => l.CogCoordinatorId, "Cog coordinator", FieldKind.Actor)
-                .Field(l => l.RecipientId, "Recipient", FieldKind.Lookup, options: IndustrialActivityOptions);
+        // ---- requests add their own fields to the same "document" target --------------
+        fields.ForSubjectType("Request")
+            .Extend<RequestDocument>("document")
+                .Field(r => r.Urgency, "Urgency")
+                .Field(r => r.IsReplyRequired, "Reply required")
+                .Field(r => r.DateReplyRequiredBy, "Reply required by")
+                .Field(r => r.DateReplyReceived, "Reply received")
+                .Field(r => r.DateSent, "Date sent")
+                .Field(r => r.CoordinatorId, "Coordinator", FieldKind.Actor)
+                .Field(r => r.RecipientId, "Recipient", FieldKind.Lookup, options: RecipientOptions);
     });
 ```
 
@@ -100,26 +100,25 @@ Alterations twenty-one, and the other types will grow.
 **The catalog for a subject type is the union of every declaration that applies to it.**
 
 - `ForSubjectTypes(DocumentSubjectTypes).Target<DocumentBase>("document", …)` applies to
-  all eight document types. Declared once.
-- `ForSubjectType("LiaisonActionRecord").Extend<LiaisonActionRecord>("document")` adds fields
-  to the **same** `document` target, for LARs only.
-- So a Misc Document workflow sees *Status, Internal due date, Due date, Comments, Group*; a LAR
-  workflow sees those **plus** *Urgency, Reply required, …, Recipient*. The author sees one
-  "This document" target either way.
+  every document type. Declared once.
+- `ForSubjectType("Request").Extend<RequestDocument>("document")` adds fields to the **same**
+  `document` target, for requests only.
+- So a general document's workflow sees *Status, Internal due date, Due date, Comments, Group*;
+  a request's workflow sees those **plus** *Urgency, Reply required, …, Recipient*. The author
+  sees one "This document" target either way.
 
 Why this works without extra plumbing: `DocumentBase` is TPH in one `Documents` table, so the
-`document` target's resolver already materialises a `LiaisonActionRecord` for a LAR. The
+`document` target's resolver already materialises a `RequestDocument` for a request. The
 extension's accessors run against that instance. At runtime each field checks the resolved
 entity is assignable to its declaring type and fails with a wiring error if not (a resolver
-for a LAR subject that returned a non-LAR is a host bug, not an authoring error).
+for a request subject that returned something else is a host bug, not an authoring error).
 
 `Extend` can also add whole new targets for one type — e.g. a future
-`ForSubjectType("ShipAlteration").Target<SAItem>("saItems", …)` — the same way.
+`ForSubjectType("Inspection").Target<InspectionItem>("inspectionItems", …)` — the same way.
 
-**Convention for TRDIS:** one partial per document type —
-`TrdisWorkflowFields.cs` (base + work items), `TrdisWorkflowFields.Lar.cs`,
-`TrdisWorkflowFields.ShipAlteration.cs`, … — so whoever extends a document type extends its
-workflow fields in a file named after it, next to `TrdisWorkflowVocabulary`.
+**Suggested host convention:** one partial per document type — `WorkflowFields.cs` (base +
+work items), `WorkflowFields.Request.cs`, `WorkflowFields.Inspection.cs`, … — so whoever extends
+a document type extends its workflow fields in a file named after it.
 
 **Startup validation** (joins `ValidateWiringAtStartup`) rejects:
 
@@ -162,7 +161,7 @@ Default dispatch `InTransaction`, default failure policy `FailOperation`. Runs o
 context, inside the engine's transaction, as the acting user.
 
 1. Look up `(run.SubjectType, target)` in the catalog. Missing → fail (*"This workflow updates
-   'Urgency', which Misc Documents do not have"*).
+   'Urgency', which general documents do not have"*).
 2. `resolve` the entities. `Cardinality.One` with zero results → fail (*"No work item for
    section 12 on this document"*); with more than one → fail. `Many` with zero → succeed, nothing changed.
 3. For each assignment: render tokens, convert to the field's type. Unparseable → fail.
@@ -181,27 +180,27 @@ All assignments on all entities succeed or the trigger fails as a whole; under
 `LogAndContinue`, a refusal from a host `write` that already called `SaveChangesAsync` inside
 the ambient transaction is **not** undone — see *Risks*.
 
-### 5. State-machine fields (TRDIS)
+### 5. State-machine fields (in the host)
 
 `Status` and `WorkItemState` declare `write:` delegates that call new methods on the existing
 services:
 
 ```csharp
 // IDocumentService
-Task<Result<Unit, Exception>> TransitionToAsync(DocumentBase document, DocumentStatus target, string? modifierEdipi);
+Task<Result<Unit, Exception>> TransitionToAsync(DocumentBase document, DocumentStatus target, string? modifierId);
 ```
 
-which builds the machine with `DocumentStateMachineFactory.Create(document)`, finds the
+which builds the document's state machine, finds the
 permitted trigger whose destination is `target` (via Stateless's `GetPermittedTriggers` +
 `GetInfo()`), and fires it. No permitted trigger → `InvalidOperationException("Cannot move
 from Issued to On Hold")`. More than one → error (none today: every state has at most one
-transition per destination). Already in `target` → no-op. `WorkItemService` gets the same
-method over `WorkItemStateMachineFactory`. The existing `FireTriggerAsync` methods are
-refactored to share the core, so the transition rules live in one place.
+transition per destination). Already in `target` → no-op. The work-item service gets the same
+method over its own machine, sharing the core with the existing transition methods so the
+rules live in one place.
 
-**Modifier stamping** follows `TrdisProgressSink`: `ModifierId` takes the actor's EDIPI via
-`TrdisWorkflowVocabulary.ToEdipi`; for `WorkflowActors.System` the row keeps its existing
-modifier. `Modified = UtcNow` either way.
+**Modifier stamping** follows the host's progress sink: `ModifierId` takes the actor's id in
+the host's own form; for `WorkflowActors.System` the row keeps its existing modifier.
+`Modified = UtcNow` either way.
 
 ### 6. Tokens
 
@@ -220,7 +219,7 @@ trigger on a version with a `SubjectType`:
 - the trigger's event is one the catalog can resolve on (e.g. `branchWorkItem` needs a task with
   a branch — warn, not error, since branching is decided at run time).
 
-So removing *Urgency* from LARs fails validation on every LAR workflow that sets it, at publish,
+So removing *Urgency* from requests fails validation on every request workflow that sets it, at publish,
 rather than failing a user's task completion later. Versions already published are not
 re-validated; one that names a removed field fails at run time with step 1's message.
 
@@ -232,8 +231,8 @@ re-validated; one that names a removed field fails at run time with step 1's mes
 | **EntityFrameworkCore** | `UpdateFieldsTrigger` (`workflow.updateFields`), value conversion, `TriggerTemplate` tokens, `TriggerExecution.Detail` (nullable, one migration), startup wiring checks |
 | **AspNetCore** | `GET {builder}/fields/{subjectType}` and `GET {builder}/fields/{subjectType}/{target}/{field}/options?q=` (lookups) |
 | **Blazor** | `UpdateFieldsEditor.razor`; builder client methods for both endpoints |
-| **Demo** | Catalog over `DocumentBase` / `ChangeRequest` (as the LAR stand-in) / `WorkItem`; a seeded "put on hold" workflow; demo statuses gain a small state machine so refusal is demonstrable |
-| **TRDIS (`Dev`)** | `TrdisWorkflowFields*.cs`; `TransitionToAsync` on both services; registration in `PersistenceStartupConfiguration`; claim for the new operation in `TrdisAuthorizationPolicy` |
+| **Demo** | Catalog over `DocumentBase` / `ChangeRequest` (as the request stand-in) / `WorkItem`; a seeded "put on hold" workflow; demo statuses gain a small state machine so refusal is demonstrable |
+| **First host** (its own repository) | Its field catalog; `TransitionToAsync` on its document and work-item services; registration at startup; authorization for the new operation |
 
 ## Testing
 
@@ -242,29 +241,28 @@ re-validated; one that names a removed field fails at run time with step 1's mes
 - Trigger: One/Many resolution, zero/many-for-One failures, unchanged short-circuit, ordered
   assignments, refusal under each failure policy, change summary text.
 - Authorization: denied operation fails the execution; `System` bypass.
-- Validator: unknown target/field, LAR-only field on a Misc workflow, bad literal.
+- Validator: unknown target/field, a request-only field on a general document's workflow, bad literal.
 - EF integration (demo context): completing a task puts the document On Hold in the same
   transaction; refused transition rolls back the completion.
-- TRDIS (`Dev` test fixture): `TransitionToAsync` against both state machines; a Misc Document
-  workflow puts the document On Hold; an Issued document refuses and the completion rolls back;
-  a LAR workflow sets Urgency.
+- The first host, in its own repository: `TransitionToAsync` against both state machines; a
+  workflow puts a document On Hold; an issued document refuses and the completion rolls back;
+  a request workflow sets Urgency.
 - Browser: author the trigger in the demo builder and run it from *Try it*.
 
 ## Risks and open points
 
-- **`LogAndContinue` + a host write that saved.** TRDIS's service methods call
+- **`LogAndContinue` + a host write that saved.** A host's service methods may call
   `SaveChangesAsync` inside the ambient transaction. If assignment 2 of 3 fails under
   `LogAndContinue`, assignment 1 is already saved and the transaction still commits. Mitigation
   in this design: the trigger wraps its writes in a savepoint and rolls back to it on failure,
   so `LogAndContinue` means *nothing changed, workflow advanced*. The engine always runs this
   inside `WorkflowTransaction`, so `Database.CurrentTransaction` exists; on a provider without
   savepoint support the trigger refuses `LogAndContinue` at publish and requires `FailOperation`.
-- **`LiaisonActionRecord.IsCancelled` duplicates `Status == Cancelled`.** Not exposed in the
-  catalog; cancelling a LAR from a workflow goes through Status. TRDIS should decide which is
+- **A host flag that duplicates a status** (a cancelled flag beside `Status == Cancelled`) is
+  best left out of the catalog; cancelling goes through Status. The host should decide which is
   authoritative before anyone asks for the flag.
-- **`TrdisDocumentType` includes types with no workflow yet.** `ForSubjectTypes` takes the same
-  derived list `TrdisSubjectTypes()` already uses, so a new type gets the base fields with no
-  extra wiring.
+- **Document types with no workflow yet.** `ForSubjectTypes` takes the host's list of subject
+  types, so a new type gets the base fields with no extra wiring.
 - **Out of scope:** expressions (`DueDate + 5d` relative to another field), conditional
   assignments, writes to entities the host has not exposed, raw (state-machine-bypassing)
   writes.

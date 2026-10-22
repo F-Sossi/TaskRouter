@@ -720,5 +720,5 @@ CI and the publish, timers.
 - **Transaction composition docs.**
 - **CI, SourceLink, the GitHub repo, the publish.**
 - **Timers.**
-- **Adopting any of this in a host.** That is `Dev`'s item 12, and it gets easier the moment
+- **Adopting any of this in a host.** That is the host's own work, and it gets easier the moment
   this lands.

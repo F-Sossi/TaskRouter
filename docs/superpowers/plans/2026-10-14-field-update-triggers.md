@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-14-field-update-triggers-design.md`
 
-**Scope:** this repository only. The TRDIS wiring (`TrdisWorkflowFields*.cs`, `TransitionToAsync` on its two services) is a follow-up plan against `../Dev`, written once this ships as a preview package.
+**Scope:** this repository only. Wiring the first host (its field catalog, `TransitionToAsync` on its two services) is a follow-up in that host's own repository, once this ships as a preview package.
 
 **Deviation from the spec, deliberate:** the catalog and its builder live in **EntityFrameworkCore**, not Core, because a target's resolver is an `IQueryable<T>` that must be materialised with EF. Core keeps everything that crosses the wire. The demo does not seed a field-update workflow (it would change the trigger counts existing tests assert on); the browser check in Task 13 authors one instead. Two spec checks are dropped as not worth their cost: the startup check that every catalog subject type is in `WorkflowBuilderOptions.SubjectTypes` (the options are configured separately and a mismatch is harmless — the type is simply never offered), and refusing `LogAndContinue` at publish on providers without savepoints. In its place, `FieldWriteScope.BeginAsync` refuses at run time, before writing anything, when the transaction reports no savepoint support — which SQL Server does when `MultipleActiveResultSets=True` (found in Task 5's review; the original claim that every supported provider has savepoints was wrong).
 
@@ -1646,7 +1646,7 @@ git commit -m "Let a host declare the fields authors may set, shared across docu
 - Create: `src/TaskRouter.EntityFrameworkCore/Fields/FieldWriteScope.cs`
 - Test: add to `tests/TaskRouter.Tests/UpdateFieldsTriggerTests.cs` (created here, grown in Task 7)
 
-Why this exists, for the executor: under `LogAndContinue` a refused update must leave **nothing** changed while the workflow still advances. A host writer may call `SaveChangesAsync` itself (TRDIS's services do), so its writes reach the database inside the engine's transaction; and EF keeps the changed values in its change tracker, so the engine's next save would write them again. The scope handles both: it flushes the engine's own pending work first (so a rollback cannot take that with it), takes a savepoint, watches which entities change, and on failure rolls back to the savepoint and reloads or detaches exactly those entities.
+Why this exists, for the executor: under `LogAndContinue` a refused update must leave **nothing** changed while the workflow still advances. A host writer may call `SaveChangesAsync` itself (the first host's services do), so its writes reach the database inside the engine's transaction; and EF keeps the changed values in its change tracker, so the engine's next save would write them again. The scope handles both: it flushes the engine's own pending work first (so a rollback cannot take that with it), takes a savepoint, watches which entities change, and on failure rolls back to the savepoint and reloads or detaches exactly those entities.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3651,7 +3651,7 @@ builder.Services.AddTaskRouterFor<AppDbContext>()
 - **Schema:** this release adds `TaskRouterTriggerExecutions.Detail` (nullable). Add a migration.
 ````
 
-- [ ] **Step 2: STATE.md.** Add a dated entry at the top of the "Last updated" paragraph in the existing style: `2026-10-14` (or the actual date): field-update triggers on branch `field-triggers` — what shipped, the one schema change, and that TRDIS wiring is the next plan. Do not bump the version here; the repo bumps versions in their own commit at merge time.
+- [ ] **Step 2: STATE.md.** Add a dated entry at the top of the "Last updated" paragraph in the existing style: `2026-10-14` (or the actual date): field-update triggers on branch `field-triggers` — what shipped, the one schema change, and that wiring the first host is the next plan. Do not bump the version here; the repo bumps versions in their own commit at merge time.
 
 - [ ] **Step 3: Commit**
 
@@ -3690,13 +3690,8 @@ Use `superpowers:finishing-a-development-branch`.
 
 ---
 
-## Follow-up plan (not this one): TRDIS wiring in `../Dev`
+## Follow-up (not this plan): wiring the first host
 
-Written after this ships as a preview package. Contents, so nothing is lost:
-
-- Take the new preview; add the `TriggerExecutionDetail` migration to TRDIS (watch the CRLF churn rule in `TASKROUTER-INTEGRATION.md`).
-- `IDocumentService.TransitionToAsync(DocumentBase, DocumentStatus, string? modifierEdipi)` and `IWorkItemService.TransitionToAsync(WorkItem, WorkItemStatus, string? modifierEdipi)`: build the Stateless machine, pick the permitted trigger whose destination is the target (`GetPermittedTriggers` + `GetInfo()`), fire it; no-op when already there; refactor `FireTriggerAsync` to share the core.
-- `TrdisWorkflowFields.cs` (base `document` target over every `TrdisDocumentType`, `branchWorkItem` by `AssignedSectionId == int.Parse(branchKey)`, `allWorkItems`), `TrdisWorkflowFields.Lar.cs` (Urgency, IsReplyRequired, DateReplyRequiredBy, DateReplyReceived, DateSent, CogCoordinatorId as Actor, RecipientId as Lookup over IndustrialActivity). `IsCancelled` deliberately absent.
-- Stamping through `TrdisWorkflowVocabulary.ToEdipi`; keep the existing modifier for `WorkflowActors.System`.
-- `TrdisAuthorizationPolicy`: decide who may `UpdateSubjectFields`.
-- Tests in the `Dev` fixture: Misc Document to On Hold; Issued refuses and rolls back; LAR sets Urgency.
+Done in that host's own, private repository once this shipped as a preview package: its field
+catalog, `TransitionToAsync` on its document and work-item services, modifier stamping, and who
+may `UpdateSubjectFields`.
