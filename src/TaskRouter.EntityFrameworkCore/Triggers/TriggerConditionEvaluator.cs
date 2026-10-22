@@ -22,18 +22,49 @@ namespace TaskRouter.EntityFrameworkCore.Triggers;
 /// </summary>
 internal static class TriggerConditionEvaluator
 {
+    private static readonly string[] Operators = ["==", "!=", "contains", "startsWith"];
+
+    /// <summary>
+    /// The paths an operand may name. Anything else with a dot in it is refused rather than
+    /// read as a literal, because a mistyped path would otherwise compare as text and
+    /// silently never match.
+    /// </summary>
+    private static readonly HashSet<string> KnownPaths = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "task.status", "task.outcome", "task.type", "task.branch", "task.assignee", "task.id",
+        "run.status", "run.id", "event", "subject.type", "subject.id"
+    };
+
+    private sealed record Comparison(string Left, string Operator, string Right);
+
+    /// <summary>
+    /// Throws <see cref="FormatException"/> if <paramref name="expression"/> would not
+    /// evaluate. The builder calls this at publish, so a malformed condition is refused
+    /// there instead of being skipped with a log line at run time. It is the same parse
+    /// <see cref="Evaluate"/> runs, so the two cannot disagree about what is valid.
+    /// </summary>
+    public static void Validate(string expression) => Parse(expression);
+
     public static bool Evaluate(string expression, WorkflowTriggerContext context)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(expression);
         ArgumentNullException.ThrowIfNull(context);
 
         // OR over AND-groups.
+        return Parse(expression).Any(group => group.All(c => Compare(c, context)));
+    }
+
+    private static List<List<Comparison>> Parse(string expression)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expression);
+
         var orGroups = expression.Split("||", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
         if (orGroups.Length == 0)
         {
             throw new FormatException($"Empty condition: '{expression}'.");
         }
+
+        var parsed = new List<List<Comparison>>();
 
         foreach (var group in orGroups)
         {
@@ -44,18 +75,13 @@ internal static class TriggerConditionEvaluator
                 throw new FormatException($"Empty condition group in '{expression}'.");
             }
 
-            if (terms.All(t => EvaluateComparison(t, context)))
-            {
-                return true;
-            }
+            parsed.Add([.. terms.Select(ParseComparison)]);
         }
 
-        return false;
+        return parsed;
     }
 
-    private static readonly string[] Operators = ["==", "!=", "contains", "startsWith"];
-
-    private static bool EvaluateComparison(string term, WorkflowTriggerContext context)
+    private static Comparison ParseComparison(string term)
     {
         foreach (var op in Operators)
         {
@@ -73,35 +99,63 @@ internal static class TriggerConditionEvaluator
                 throw new FormatException($"Malformed comparison: '{term}'.");
             }
 
-            var leftValue = Resolve(left, context);
-            var rightValue = Resolve(right, context);
+            CheckOperand(left);
+            CheckOperand(right);
 
-            return op.ToUpperInvariant() switch
-            {
-                "==" => string.Equals(leftValue, rightValue, StringComparison.OrdinalIgnoreCase),
-                "!=" => !string.Equals(leftValue, rightValue, StringComparison.OrdinalIgnoreCase),
-                "CONTAINS" => leftValue is not null && rightValue is not null
-                    && leftValue.Contains(rightValue, StringComparison.OrdinalIgnoreCase),
-                "STARTSWITH" => leftValue is not null && rightValue is not null
-                    && leftValue.StartsWith(rightValue, StringComparison.OrdinalIgnoreCase),
-                _ => throw new FormatException($"Unsupported operator '{op}'.")
-            };
+            return new Comparison(left, op, right);
         }
 
         throw new FormatException(
             $"No supported operator in '{term}'. Expected one of: {string.Join(", ", Operators)}.");
     }
 
+    private static void CheckOperand(string operand)
+    {
+        if (IsQuoted(operand) || IsVariable(operand))
+        {
+            return;
+        }
+
+        if (operand.Contains('.', StringComparison.Ordinal) && !KnownPaths.Contains(operand))
+        {
+            throw new FormatException($"Unknown condition path '{operand}'.");
+        }
+    }
+
+    private static bool IsQuoted(string operand) =>
+        operand.Length >= 2
+        && ((operand[0] == '\'' && operand[^1] == '\'')
+         || (operand[0] == '"' && operand[^1] == '"'));
+
+    private static bool IsVariable(string operand) =>
+        operand.Length > 4 && operand.StartsWith("var.", StringComparison.OrdinalIgnoreCase);
+
+    private static bool Compare(Comparison comparison, WorkflowTriggerContext context)
+    {
+        var leftValue = Resolve(comparison.Left, context);
+        var rightValue = Resolve(comparison.Right, context);
+
+        return comparison.Operator.ToUpperInvariant() switch
+        {
+            "==" => string.Equals(leftValue, rightValue, StringComparison.OrdinalIgnoreCase),
+            "!=" => !string.Equals(leftValue, rightValue, StringComparison.OrdinalIgnoreCase),
+            "CONTAINS" => leftValue is not null && rightValue is not null
+                && leftValue.Contains(rightValue, StringComparison.OrdinalIgnoreCase),
+            "STARTSWITH" => leftValue is not null && rightValue is not null
+                && leftValue.StartsWith(rightValue, StringComparison.OrdinalIgnoreCase),
+            _ => throw new FormatException($"Unsupported operator '{comparison.Operator}'.")
+        };
+    }
+
+    /// <summary>An operand's value. Parse has already refused anything unresolvable.</summary>
     private static string? Resolve(string operand, WorkflowTriggerContext context)
     {
-        if (operand.Length >= 2
-            && ((operand[0] == '\'' && operand[^1] == '\'')
-             || (operand[0] == '"' && operand[^1] == '"')))
+        if (IsQuoted(operand))
         {
             return operand[1..^1];
         }
 
-        if (operand.StartsWith("var.", StringComparison.OrdinalIgnoreCase))
+        if (IsVariable(operand))
         {
             var name = operand[4..];
             var variables = context.Variables.GetAllAsync().GetAwaiter().GetResult();
@@ -122,11 +176,8 @@ internal static class TriggerConditionEvaluator
             "SUBJECT.TYPE" => context.Subject.SubjectType,
             "SUBJECT.ID" => context.Subject.SubjectId,
 
-            // Anything else is a bare literal. Unknown *paths* would be a silent
-            // mis-evaluation, so reject anything that looks like one.
-            _ => operand.Contains('.', StringComparison.Ordinal)
-                ? throw new FormatException($"Unknown condition path '{operand}'.")
-                : operand
+            // Anything else is a bare literal.
+            _ => operand
         };
     }
 }

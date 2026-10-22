@@ -200,6 +200,9 @@ public static class WorkflowDefinitionValidator
 
             foreach (var r in routes)
             {
+                if (r.IsDefault && !string.IsNullOrWhiteSpace(r.ConditionKey))
+                    errors.Add(new("ROUTE_DEFAULT_CONDITION", $"Default route on '{Label(t)}' cannot have a condition.", t.Id));
+
                 if (!byId.ContainsKey(r.NextTaskDefinitionId))
                 {
                     errors.Add(new("ROUTE_TO_UNKNOWN",

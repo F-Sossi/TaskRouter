@@ -44,6 +44,10 @@ public sealed partial class WorkflowEngine
 
             var now = DateTime.UtcNow;
 
+            if (task.ForkManifestId.HasValue && await IsRejectionOutcomeAsync(task, outcomeKey, actorId, ct).ConfigureAwait(false))
+                throw new InvalidOperationException("Convergence tasks must reject through selective rejection.");
+            await ValidateCompletableAsync(task, outcomeKey, ct).ConfigureAwait(false);
+
             // As CompleteTaskAsync leaves it: credited to whoever completes it.
             task.AssignedToActorId = actorId;
             task.Status = WorkflowTaskStatus.Completed;
@@ -51,25 +55,7 @@ public sealed partial class WorkflowEngine
             task.CompletedDate = now;
 
             var next = await NextStepsAsync(task, outcomeKey, now, ct).ConfigureAwait(false);
-            var preview = new TriggerPreview([.. next.Select(n => n.Task.ToSnapshot())]);
-            var actions = new List<PlannedAction>();
-
-            // As CompleteTaskAsync builds it for both of its events.
-            var branch = task.ForkGroupId is null
-                ? null
-                : new BranchContext(task.ForkGroupId, task.ForkManifestId, task.AssignedBranchKey, []);
-
-            actions.AddRange(await dispatcher.PreviewAsync(
-                task, WorkflowEventKind.TaskCompleted, actorId, preview, branch, ct).ConfigureAwait(false));
-
-            if (task.ForkGroupId is not null)
-            {
-                actions.AddRange(await dispatcher.PreviewAsync(
-                    task, WorkflowEventKind.BranchCompleted, actorId, preview, branch, ct).ConfigureAwait(false));
-            }
-
-            actions.AddRange(await NextStepActionsAsync(next, actorId, preview, ct).ConfigureAwait(false));
-            return actions;
+            return await PreviewCascadeAsync(task, next, actorId, null, ct).ConfigureAwait(false);
         });
 
     /// <summary>
@@ -88,6 +74,8 @@ public sealed partial class WorkflowEngine
         Try.RunAsync<IReadOnlyList<PlannedAction>>(async () =>
         {
             ArgumentNullException.ThrowIfNull(rejectedBranchKeys);
+            if (rejectedBranchKeys.Distinct(StringComparer.Ordinal).Count() != rejectedBranchKeys.Count)
+                throw new ArgumentException("Duplicate rejected branch keys are not allowed.", nameof(rejectedBranchKeys));
 
             if (dispatcher is null)
             {
@@ -105,6 +93,8 @@ public sealed partial class WorkflowEngine
                 return [];
             }
 
+            await ValidateCompletableAsync(task, outcomeKey, ct).ConfigureAwait(false);
+
             var now = DateTime.UtcNow;
 
             if (rejectedBranchKeys.Count == 0)
@@ -117,13 +107,7 @@ public sealed partial class WorkflowEngine
                 task.CompletedDate = now;
 
                 var onward = await NextStepsAsync(task, outcomeKey, now, ct).ConfigureAwait(false);
-                var approval = new TriggerPreview([.. onward.Select(n => n.Task.ToSnapshot())]);
-                var approved = new List<PlannedAction>();
-
-                approved.AddRange(await dispatcher.PreviewAsync(
-                    task, WorkflowEventKind.TaskCompleted, actorId, approval, null, ct).ConfigureAwait(false));
-                approved.AddRange(await NextStepActionsAsync(onward, actorId, approval, ct).ConfigureAwait(false));
-                return approved;
+                return await PreviewCascadeAsync(task, onward, actorId, null, ct).ConfigureAwait(false);
             }
 
             // Sending branches back does not hand the task to whoever completes it.
@@ -166,18 +150,8 @@ public sealed partial class WorkflowEngine
                 rework.Add((Planned(task, reworkDefinition, assignment with { BranchKey = branchKey }, now), false));
             }
 
-            var preview = new TriggerPreview([.. rework.Select(r => r.Task.ToSnapshot())]);
-
-            // The new fork group does not exist yet; the rejected keys are what a trigger reads.
             var rejection = new BranchContext(null, null, null, [.. rejectedBranchKeys]);
-            var actions = new List<PlannedAction>();
-
-            actions.AddRange(await dispatcher.PreviewAsync(
-                task, WorkflowEventKind.SelectiveRejection, actorId, preview, rejection, ct).ConfigureAwait(false));
-            actions.AddRange(await dispatcher.PreviewAsync(
-                task, WorkflowEventKind.TaskCompleted, actorId, preview, rejection, ct).ConfigureAwait(false));
-            actions.AddRange(await NextStepActionsAsync(rework, actorId, preview, ct).ConfigureAwait(false));
-            return actions;
+            return await PreviewCascadeAsync(task, rework, actorId, rejection, ct).ConfigureAwait(false);
         });
 
     private async Task<WorkflowTask> LoadForPreviewAsync(int taskId, CancellationToken ct) =>
@@ -189,39 +163,8 @@ public sealed partial class WorkflowEngine
     private async Task<WorkflowTaskDefinition?> ReworkDefinitionAsync(
         WorkflowTask task, string outcomeKey, CancellationToken ct)
     {
-        var outcomeId = await ResolveOutcomeIdAsync(task.TaskDefinitionId, outcomeKey, ct).ConfigureAwait(false);
-
-        return outcomeId is null
-            ? null
-            : await db.WorkflowTaskRoutes.AsNoTracking()
-                .Where(r => r.TaskDefinitionId == task.TaskDefinitionId
-                         && r.TaskOutcomeDefinitionId == outcomeId
-                         && !r.IsArchived)
-                .Select(r => r.NextTaskDefinition)
-                .FirstOrDefaultAsync(ct)
-                .ConfigureAwait(false);
-    }
-
-    /// <summary>The "reached" triggers of the steps a completion would create, and "converged" on a convergence.</summary>
-    private async Task<List<PlannedAction>> NextStepActionsAsync(
-        List<(WorkflowTask Task, bool Converges)> next, string actorId, TriggerPreview preview, CancellationToken ct)
-    {
-        var actions = new List<PlannedAction>();
-
-        foreach (var (step, converges) in next)
-        {
-            if (converges)
-            {
-                actions.AddRange(await dispatcher!.PreviewAsync(
-                    step, WorkflowEventKind.ForkConverged, actorId, preview, await ConvergedBranchAsync(step, ct).ConfigureAwait(false), ct)
-                    .ConfigureAwait(false));
-            }
-
-            actions.AddRange(await dispatcher!.PreviewAsync(step, WorkflowEventKind.TaskCreated, actorId, preview, null, ct)
-                .ConfigureAwait(false));
-        }
-
-        return actions;
+        var eligible = await GetValidRoutesAsync(task, outcomeKey, ct).ConfigureAwait(false);
+        return eligible.Count == 1 && eligible[0].IsReworkRoute ? eligible[0].NextTaskDefinition : null;
     }
 
     /// <summary>As <see cref="HandleConvergenceAsync"/> builds it: the manifest and every branch on it.</summary>
@@ -251,7 +194,9 @@ public sealed partial class WorkflowEngine
     {
         var next = new List<(WorkflowTask, bool)>();
 
-        foreach (var route in await GetValidRoutesAsync(task, outcomeKey, ct).ConfigureAwait(false))
+        var routes = await GetValidRoutesAsync(task, outcomeKey, ct).ConfigureAwait(false);
+        await EnsureEligibleRoutesAsync(task, outcomeKey, routes, ct).ConfigureAwait(false);
+        foreach (var route in routes)
         {
             var definition = route.NextTaskDefinition
                 ?? throw new InvalidOperationException($"Route {route.Id} has no resolved target definition.");
@@ -320,15 +265,16 @@ public sealed partial class WorkflowEngine
     /// <summary>A step as it would be created. Never added to the context.</summary>
     private static WorkflowTask Planned(
         WorkflowTask from, WorkflowTaskDefinition definition, WorkflowAssignment assignment, DateTime now) => new()
-    {
-        WorkflowRunId = from.WorkflowRunId,
-        TaskDefinitionId = definition.Id,
-        TaskDefinition = definition,
-        Status = WorkflowTaskStatus.NotStarted,
-        AssignedToActorId = assignment.ActorId,
-        AssignedBranchKey = assignment.BranchKey,
-        SubWorkflowInstanceId = from.SubWorkflowInstanceId,
-        Created = now,
-        Modified = now
-    };
+        {
+            WorkflowRunId = from.WorkflowRunId,
+            TaskDefinitionId = definition.Id,
+            TaskDefinition = definition,
+            Status = WorkflowTaskStatus.NotStarted,
+            AssignedToActorId = assignment.ActorId,
+            AssignedBranchKey = assignment.BranchKey,
+            SubWorkflowInstanceId = from.SubWorkflowInstanceId,
+            ParentTaskId = from.ParentTaskId,
+            Created = now,
+            Modified = now
+        };
 }

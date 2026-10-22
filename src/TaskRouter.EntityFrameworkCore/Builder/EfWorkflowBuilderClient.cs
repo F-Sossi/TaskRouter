@@ -471,6 +471,14 @@ public sealed class EfWorkflowBuilderClient(
         errors.AddRange(FieldErrors(model));
         errors.AddRange(TriggerEventErrors(model));
 
+        var knownConditions = conditions.Select(condition => condition.ConditionKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in model.Tasks)
+            foreach (var route in task.Routes.Where(route => !string.IsNullOrWhiteSpace(route.ConditionKey)))
+            {
+                if (!knownConditions.Contains(route.ConditionKey!))
+                    errors.Add(new("ROUTE_UNKNOWN_CONDITION", $"Task '{task.Label}' uses unregistered route condition '{route.ConditionKey}'."));
+            }
+
         return Task.FromResult<IReadOnlyList<ValidationError>>(errors);
     }
 
@@ -488,6 +496,18 @@ public sealed class EfWorkflowBuilderClient(
         {
             foreach (var trigger in task.Triggers.Where(t => t.IsActive))
             {
+                if (!string.IsNullOrWhiteSpace(trigger.Condition))
+                {
+                    try
+                    {
+                        TriggerConditionEvaluator.Validate(trigger.Condition);
+                    }
+                    catch (FormatException error)
+                    {
+                        errors.Add(new("TRIGGER_INVALID_CONDITION", $"Trigger on '{task.Label}': {error.Message}"));
+                    }
+                }
+
                 var name = triggers.Descriptors
                     .FirstOrDefault(d => string.Equals(d.Key, trigger.TriggerKey, StringComparison.OrdinalIgnoreCase))
                     ?.DisplayName ?? trigger.TriggerKey;
@@ -760,9 +780,14 @@ public sealed class EfWorkflowBuilderClient(
         return SaveResult.Ok(versionId);
     }
 
-    public async Task<SaveResult> PublishAsync(WorkflowEditModel model, CancellationToken ct = default)
+    public Task<SaveResult> PublishAsync(WorkflowEditModel model, CancellationToken ct = default) =>
+        WorkflowTransaction.ExecuteAsync(db, token => PublishCoreAsync(model, token), ct);
+
+    private async Task<SaveResult> PublishCoreAsync(WorkflowEditModel model, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(model);
+        if (model.DefinitionId != 0)
+            await WorkflowSerialization.DefinitionAsync(db, model.DefinitionId, ct).ConfigureAwait(false);
 
         var errors = await ValidateAsync(model, ct).ConfigureAwait(false);
         if (errors.Count > 0)
@@ -770,7 +795,9 @@ public sealed class EfWorkflowBuilderClient(
             return SaveResult.Failed(errors);
         }
 
-        var versionId = await PersistAsync(model, ct).ConfigureAwait(false);
+        // Already inside PublishAsync's transaction: the core, not PersistAsync, which would
+        // open a second one around it.
+        var versionId = await PersistCoreAsync(model, ct).ConfigureAwait(false);
 
         // Validate what actually landed, not just what was submitted.
         var saved = await LoadGraphAsync(versionId, tracking: true, ct).ConfigureAwait(false)
@@ -789,10 +816,15 @@ public sealed class EfWorkflowBuilderClient(
             .Where(v => v.WorkflowDefinitionId == saved.WorkflowDefinitionId && v.Id != saved.Id)
             .ToListAsync(ct).ConfigureAwait(false);
 
+        await db.WorkflowDefinitionVersions.Where(version => version.WorkflowDefinitionId == saved.WorkflowDefinitionId && version.Id != saved.Id)
+            .ExecuteUpdateAsync(update => update.SetProperty(version => version.IsLatest, false), ct).ConfigureAwait(false);
+
         foreach (var sibling in siblings)
         {
             sibling.IsLatest = false;
         }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         saved.IsPublished = true;
         saved.IsLatest = true;
@@ -875,6 +907,8 @@ public sealed class EfWorkflowBuilderClient(
 
     private async Task<int> PersistCoreAsync(WorkflowEditModel model, CancellationToken ct)
     {
+        if (model.DefinitionId != 0)
+            await WorkflowSerialization.DefinitionAsync(db, model.DefinitionId, ct).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         var definition = model.DefinitionId == 0

@@ -22,18 +22,43 @@ public sealed partial class WorkflowEngine(
     /// runs at the one moment the data is durable — and never at all if the transaction
     /// rolled back.
     /// </summary>
-    private Task<T> InTransactionAsync<T>(Func<CancellationToken, Task<T>> work, CancellationToken ct) =>
-        WorkflowTransaction.ExecuteAsync(db, async token =>
+    private int _operationDepth;
+
+    private async Task<T> InTransactionAsync<T>(Func<CancellationToken, Task<T>> work, CancellationToken ct)
+    {
+        var outermost = _operationDepth++ == 0;
+        var queued = _completesAutomatically.ToList();
+        try
         {
-            // Cleared on entry because the execution strategy may run this more than once,
-            // and a retry must not complete tasks queued by the attempt that rolled back.
+            return await WorkflowTransaction.ExecuteAsync(db, async token =>
+            {
+                if (outermost)
+                {
+                    _completesAutomatically.Clear();
+                    _subjectsByRun.Clear();
+                    _carryForwardByVersion.Clear();
+                }
+
+                var result = await work(token).ConfigureAwait(false);
+                if (outermost) await CompleteAutomaticallyAsync(token).ConfigureAwait(false);
+                return result;
+            }, ct, postCommit).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
             _completesAutomatically.Clear();
-
-            var result = await work(token).ConfigureAwait(false);
-
-            await CompleteAutomaticallyAsync(token).ConfigureAwait(false);
-            return result;
-        }, ct, postCommit);
+            _completesAutomatically.AddRange(queued);
+            _subjectsByRun.Clear();
+            _carryForwardByVersion.Clear();
+            if (error is DbUpdateConcurrencyException)
+                throw new InvalidOperationException("The workflow changed while this operation was running. Reload and try again.", error);
+            throw;
+        }
+        finally
+        {
+            _operationDepth--;
+        }
+    }
 
     private Task InTransactionAsync(Func<CancellationToken, Task> work, CancellationToken ct) =>
         InTransactionAsync(async token =>
@@ -56,6 +81,14 @@ public sealed partial class WorkflowEngine(
         dispatcher is null
             ? Task.CompletedTask
             : dispatcher.DispatchAsync(task, eventKind, actorId, null, branch, ct);
+
+    private async Task TaskCreatedAsync(WorkflowTask task, string actorId, CancellationToken ct)
+    {
+        var branch = task.ForkGroupId is null ? null
+            : new BranchContext(task.ForkGroupId, task.ForkManifestId, task.AssignedBranchKey, []);
+        await FireAsync(task, WorkflowEventKind.TaskCreated, actorId, branch, ct).ConfigureAwait(false);
+        await SpawnAutomaticAsync(task, actorId, ct).ConfigureAwait(false);
+    }
 
     private readonly Dictionary<string, IRouteConditionEvaluator> _conditions =
         BuildConditionMap(conditionEvaluators);
@@ -213,8 +246,7 @@ public sealed partial class WorkflowEngine(
             await db.SaveChangesAsync(token).ConfigureAwait(false);
 
             await FireAsync(task, WorkflowEventKind.RunStarted, actorId, ct: token).ConfigureAwait(false);
-            await FireAsync(task, WorkflowEventKind.TaskCreated, actorId, ct: token).ConfigureAwait(false);
-            await SpawnAutomaticAsync(task, actorId, token).ConfigureAwait(false);
+            await TaskCreatedAsync(task, actorId, token).ConfigureAwait(false);
 
             run.DefinitionVersion = version;
             return run.ToSnapshot([task]);
@@ -237,7 +269,7 @@ public sealed partial class WorkflowEngine(
                 WorkflowOperation.CompleteTask, task, actorId, null, null, token)
                 .ConfigureAwait(false);
 
-            if (task.ForkManifestId.HasValue && await IsRejectionOutcomeAsync(task, outcomeKey, token).ConfigureAwait(false))
+            if (task.ForkManifestId.HasValue && await IsRejectionOutcomeAsync(task, outcomeKey, actorId, token).ConfigureAwait(false))
             {
                 throw new InvalidOperationException(
                     "Convergence tasks must reject through selective rejection so the " +
@@ -352,6 +384,8 @@ public sealed partial class WorkflowEngine(
     {
         var routes = await GetValidRoutesAsync(task, outcomeKey, ct).ConfigureAwait(false);
 
+        await EnsureEligibleRoutesAsync(task, outcomeKey, routes, ct).ConfigureAwait(false);
+
         foreach (var route in routes)
         {
             var isConvergenceRoute = task.ForkGroupId.HasValue
@@ -402,8 +436,7 @@ public sealed partial class WorkflowEngine(
             Log(next.Id, "Created", $"Follow-on from task {task.Id}", actorId, now);
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
-            await FireAsync(next, WorkflowEventKind.TaskCreated, actorId, ct: ct).ConfigureAwait(false);
-            await SpawnAutomaticAsync(next, actorId, ct).ConfigureAwait(false);
+            await TaskCreatedAsync(next, actorId, ct).ConfigureAwait(false);
         }
     }
 
@@ -480,6 +513,7 @@ public sealed partial class WorkflowEngine(
         convergence.ConvergenceTaskDefinitionId = null;
         convergence.ForkManifestId = manifest.Id;
         convergence.SubWorkflowInstanceId = task.SubWorkflowInstanceId;
+        convergence.ParentTaskId = source.ParentTaskId;
 
         db.WorkflowTasks.Add(convergence);
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -494,10 +528,7 @@ public sealed partial class WorkflowEngine(
 
         await FireAsync(convergence, WorkflowEventKind.ForkConverged, actorId, branchContext, ct)
             .ConfigureAwait(false);
-        await SpawnAutomaticAsync(convergence, actorId, ct).ConfigureAwait(false);
-
-        await FireAsync(convergence, WorkflowEventKind.TaskCreated, actorId, ct: ct)
-            .ConfigureAwait(false);
+        await TaskCreatedAsync(convergence, actorId, ct).ConfigureAwait(false);
     }
 
     private async Task RecordBranchOutcomesAsync(ForkManifest manifest, CancellationToken ct)
@@ -508,13 +539,13 @@ public sealed partial class WorkflowEngine(
             .Where(t => t.ForkGroupId == manifest.ForkGroupId
                      && !t.IsForkOrigin
                      && t.Status == WorkflowTaskStatus.Completed)
-            .Select(t => new { t.AssignedBranchKey, t.OutcomeKey, t.Notes, t.CompletedDate })
+            .Select(t => new { t.Id, t.AssignedBranchKey, t.AssignedToActorId, t.OutcomeKey, t.Notes, t.CompletedDate })
             .ToListAsync(ct).ConfigureAwait(false);
 
         var latestPerBranch = completed
             .Where(t => t.AssignedBranchKey is not null)
             .GroupBy(t => t.AssignedBranchKey!)
-            .Select(g => g.OrderByDescending(x => x.CompletedDate).First());
+            .Select(g => g.OrderByDescending(x => x.CompletedDate).ThenByDescending(x => x.Id).First());
 
         foreach (var branch in latestPerBranch)
         {
@@ -525,6 +556,7 @@ public sealed partial class WorkflowEngine(
             }
 
             entry.BranchOutcomeKey = branch.OutcomeKey;
+            entry.AssignedToActorId = branch.AssignedToActorId;
             entry.BranchNotes = branch.Notes;
             entry.Modified = DateTime.UtcNow;
         }
@@ -572,12 +604,16 @@ public sealed partial class WorkflowEngine(
 
     // ───────────────────────────────── Helpers ─────────────────────────────────
 
-    private async Task<WorkflowTask> LoadTaskAsync(int taskId, CancellationToken ct) =>
-        await db.WorkflowTasks
+    private async Task<WorkflowTask> LoadTaskAsync(int taskId, CancellationToken ct)
+    {
+        if (db.Database.CurrentTransaction is not null)
+            await WorkflowSerialization.TaskAsync(db, taskId, ct).ConfigureAwait(false);
+        return await db.WorkflowTasks
             .Include(t => t.TaskDefinition!).ThenInclude(d => d.TaskType)
             .Include(t => t.TaskDefinition!).ThenInclude(d => d.OutgoingRoutes)
             .SingleOrDefaultAsync(t => t.Id == taskId, ct).ConfigureAwait(false)
         ?? throw new WorkflowNotFoundException("Task", taskId.ToString());
+    }
 
     /// <summary>
     /// Asks the host whether this actor may do this, and throws
@@ -726,7 +762,8 @@ public sealed partial class WorkflowEngine(
     private async Task<List<TaskRoute>> GetValidRoutesAsync(
         WorkflowTask task,
         string outcomeKey,
-        CancellationToken ct)
+        CancellationToken ct,
+        WorkflowTaskSnapshot? projection = null)
     {
         var outcomeId = await ResolveOutcomeIdAsync(task.TaskDefinitionId, outcomeKey, ct)
             .ConfigureAwait(false);
@@ -741,7 +778,7 @@ public sealed partial class WorkflowEngine(
             .Where(r => r.TaskDefinitionId == task.TaskDefinitionId
                      && r.TaskOutcomeDefinitionId == outcomeId
                      && !r.IsArchived)
-            .OrderBy(r => r.Order)
+            .OrderBy(r => r.Order).ThenBy(r => r.Id)
             .ToListAsync(ct).ConfigureAwait(false);
 
         if (routes.Count == 0)
@@ -750,13 +787,21 @@ public sealed partial class WorkflowEngine(
         }
 
         var variables = await GetVariablesAsync(task.WorkflowRunId, ct).ConfigureAwait(false);
-        var snapshot = task.ToSnapshot();
+        var snapshot = projection ?? task.ToSnapshot();
 
-        return routes
-            .Where(r => r.IsDefault
-                     || string.IsNullOrWhiteSpace(r.ConditionKey)
-                     || EvaluateCondition(r.ConditionKey!, snapshot, variables))
-            .ToList();
+        var matched = routes.Where(r => !r.IsDefault
+            && (string.IsNullOrWhiteSpace(r.ConditionKey)
+                || EvaluateCondition(r.ConditionKey!, snapshot, variables))).ToList();
+        return matched.Count > 0 ? matched : routes.Where(route => route.IsDefault).ToList();
+    }
+
+    private async Task EnsureEligibleRoutesAsync(WorkflowTask task, string outcomeKey, List<TaskRoute> routes, CancellationToken ct)
+    {
+        if (routes.Count > 0 || task.TaskDefinition?.IsTerminal == true) return;
+        var hasRoutes = await db.WorkflowTaskRoutes.AnyAsync(
+            route => route.TaskDefinitionId == task.TaskDefinitionId && !route.IsArchived, ct).ConfigureAwait(false);
+        if (task.TaskDefinition?.IsAdHoc != true || hasRoutes)
+            throw new InvalidOperationException($"No eligible route for outcome '{outcomeKey}' on task {task.Id}.");
     }
 
     /// <summary>
@@ -902,16 +947,7 @@ public sealed partial class WorkflowEngine(
         WorkflowTaskStatus.NotStarted, null, null, null, null, null,
         false, null, null, null, null);
 
-    /// <summary>
-    /// A run's subject, memoised. The engine is scoped, so this lives for one unit of
-    /// work — and a run's subject is written once at creation and never mutated, so
-    /// there is nothing for a stale entry to be stale about.
-    ///
-    /// It exists because the due-date funnel needs a subject and seven of the eight
-    /// creation paths do not have the run loaded: LoadTaskAsync does not Include it.
-    /// Threading a subject parameter through those seven call sites would reintroduce
-    /// exactly the per-site burden the funnel exists to remove.
-    /// </summary>
+    /// <summary>Per version, whether it carries an assignee forward; memoised like <see cref="_subjectsByRun"/>.</summary>
     private readonly Dictionary<int, bool> _carryForwardByVersion = [];
 
     /// <summary>
@@ -941,6 +977,16 @@ public sealed partial class WorkflowEngine(
         return carry;
     }
 
+    /// <summary>
+    /// A run's subject, memoised. The engine is scoped, so this lives for one unit of
+    /// work — and a run's subject is written once at creation and never mutated, so
+    /// there is nothing for a stale entry to be stale about.
+    ///
+    /// It exists because the due-date funnel needs a subject and seven of the eight
+    /// creation paths do not have the run loaded: LoadTaskAsync does not Include it.
+    /// Threading a subject parameter through those seven call sites would reintroduce
+    /// exactly the per-site burden the funnel exists to remove.
+    /// </summary>
     private readonly Dictionary<int, WorkflowSubject> _subjectsByRun = [];
 
     private async Task<WorkflowSubject?> SubjectForRunAsync(int runId, CancellationToken ct)
@@ -1063,24 +1109,16 @@ public sealed partial class WorkflowEngine(
             Modified = at
         });
 
-    private async Task<bool> IsRejectionOutcomeAsync(WorkflowTask task, string outcomeKey, CancellationToken ct)
+    private async Task<bool> IsRejectionOutcomeAsync(WorkflowTask task, string outcomeKey, string actorId, CancellationToken ct)
     {
-        // A convergence task's "rejection" outcome is whichever outcome routes backwards.
-        // Rather than hardcode the word, treat any outcome whose route targets a task
-        // that is not downstream-terminal as a rework path.
-        var outcomeId = await ResolveOutcomeIdAsync(task.TaskDefinitionId, outcomeKey, ct)
-            .ConfigureAwait(false);
-
-        if (outcomeId is null)
+        var projection = task.ToSnapshot() with
         {
-            return false;
-        }
-
-        var route = await db.WorkflowTaskRoutes
-            .FirstOrDefaultAsync(r => r.TaskDefinitionId == task.TaskDefinitionId
-                                   && r.TaskOutcomeDefinitionId == outcomeId
-                                   && !r.IsArchived, ct).ConfigureAwait(false);
-
-        return route is not null && route.IsReworkRoute;
+            Status = WorkflowTaskStatus.Completed,
+            OutcomeKey = outcomeKey,
+            AssignedToActorId = actorId,
+            CompletedDate = DateTime.UtcNow
+        };
+        var routes = await GetValidRoutesAsync(task, outcomeKey, ct, projection).ConfigureAwait(false);
+        return routes.Any(route => route.IsReworkRoute);
     }
 }

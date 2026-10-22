@@ -34,7 +34,11 @@ public interface IWorkflowTrigger
 /// The steps the completion would create, as they would be assigned. They do not exist yet,
 /// so their ids are zero.
 /// </param>
-public sealed record TriggerPreview(IReadOnlyList<WorkflowTaskSnapshot> NextTasks);
+public sealed record TriggerPreview(IReadOnlyList<WorkflowTaskSnapshot> NextTasks)
+{
+    public WorkflowRunSnapshot? Run { get; init; }
+    public IWorkflowVariables? Variables { get; init; }
+}
 
 public sealed record TriggerDescriptor(
     string Key,
@@ -78,7 +82,8 @@ public sealed record TriggerParameter(
     /// <summary>
     /// Whether this parameter applies, given the rest of the configuration. One that does
     /// not is neither shown nor checked: "Recipient" is only asked for when "Send to" is
-    /// "A specific person".
+    /// "A specific person". The builder clears its value once it stops applying, so it is not
+    /// saved hidden.
     /// </summary>
     public bool AppliesTo(IReadOnlyDictionary<string, string?> configuration, IReadOnlyList<TriggerParameter> siblings)
     {

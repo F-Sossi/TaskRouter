@@ -336,6 +336,8 @@ public class NotifyRecipientTests
         var existing = await _host.Db.WorkflowTaskRoutes.AsNoTracking()
             .FirstAsync(r => r.TaskDefinition!.DisplayName == "Enter Record"
                           && r.NextTaskDefinition!.DisplayName == "Provide Input");
+        await _host.Db.WorkflowTaskRoutes.Where(route => route.Id == existing.Id)
+            .ExecuteUpdateAsync(update => update.SetProperty(route => route.IsDefault, false));
         var pmReview = await _host.Db.WorkflowTaskDefinitions
             .Where(d => d.DisplayName == "PM Review" && d.WorkflowDefinitionVersionId
                 == _host.Db.WorkflowTaskDefinitions.Where(e => e.Id == existing.TaskDefinitionId)

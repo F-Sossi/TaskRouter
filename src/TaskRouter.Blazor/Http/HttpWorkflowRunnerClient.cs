@@ -190,7 +190,7 @@ public sealed class HttpWorkflowRunnerClient(HttpClient http, string prefix = "/
 
     public async Task<RunnerResult> CancelRunAsync(
         int runId, string actorId, string? reason, CancellationToken ct = default) =>
-        await PostAsync($"{_root}/runs/{runId}/cancel", new { reason }, ct).ConfigureAwait(false);
+        await PostAsync($"{_root}/runs/{runId}/cancel", new { note = reason }, ct).ConfigureAwait(false);
 
     public async Task<RunnerResult> CancelSubWorkflowAsync(
         int instanceId, string actorId, string? reason, CancellationToken ct = default) =>

@@ -1,7 +1,11 @@
 # Current State — read this first
 
 Snapshot of where the engine stands, so work can resume without re-deriving
-context. Last updated **2026-10-21**: `0.1.0-preview.15` — the three defects the pre-1.0 review confirmed are fixed, and Send
+context. Last updated **2026-10-22**: `0.1.0-preview.16` — consistency: concurrent and failed
+operations can no longer leave a workflow wrong, default routes are fallbacks, and a step with
+no matching route is refused instead of ending the run. It has a migration and behaviour
+changes; see its entry below and [`docs/consistency-upgrade.md`](docs/consistency-upgrade.md).
+Before that, **2026-10-21**: `0.1.0-preview.15`, published — the three defects the pre-1.0 review confirmed are fixed, and Send
 Notification can be saved with any "Send to". Before that, the same day: a full review ahead of 1.0 — every finding, and the order to fix them in, is in
 [`docs/1.0-readiness.md`](docs/1.0-readiness.md); start there. Before that, **2026-10-20**: `0.1.0-preview.14`, merged to `main` as `a0a23d1` and published — triggers that do what they say: Update fields, plain-language events and actions with an info button, notifications sent to a role, and a confirmation listing what a completion will do. It has breaking changes; see its entry below. Before that, **2026-10-14**: `0.1.0-preview.13` — a terminal task can close itself when
 reached, and nothing can be added under one. Before that, **2026-10-13**: `0.1.0-preview.12` — a task with no outcome is refused by
@@ -23,20 +27,22 @@ from somebody using it. Before that: shipping the runner and inbox, and acting o
 integration spike found, twice — once on plan 1's seven findings and again on the two plan 2
 produced. See the git log for the order things happened in.
 
-**Open / follow-ups (2026-10-21):** the defects found by the pre-1.0 review — three of them
-confirmed against SQL Server, including a second reassignment failing outright and a cancelled last
-branch completing the run — are listed in [`docs/1.0-readiness.md`](docs/1.0-readiness.md), section A.
-Items 1 and 6 below are carried there too. Still open from before:
+**Open / follow-ups (2026-10-22):** section A of [`docs/1.0-readiness.md`](docs/1.0-readiness.md)
+is cleared — A1–A3 in `preview.15`, A4–A9 in `preview.16`. What stands between here and a
+release candidate is sections B and C there: the remaining behaviour issues, and packaging (API
+baseline, schema policy, changelog, documentation of the public surface). Still open from before:
 
-1. `WorkflowTransaction` retries can reuse a stale change tracker, so a retried attempt may skip a change as "unchanged".
+1. ~~`WorkflowTransaction` retries can reuse a stale change tracker, so a retried attempt may skip a change as "unchanged".~~
+   Fixed in `preview.16`: each attempt restores the tracker it started from.
 2. Actor and lookup values show raw keys when a trigger is reopened in the builder.
 3. There is no way to delete a never-published draft version.
 4. `TriggerExecution.Detail` (the field update's change summary) is recorded, but nothing in the library displays it yet; the run log does not show it.
-5. ~~TRDIS wiring is the next plan.~~ Done: the `preview.14` upgrade for the first host is prepared in its private deployment repository.
-6. Two forked branches completing at the same moment can both insert the same new run-scoped
-   variable, and the second completion fails on the unique index. Run scope now works, so the
-   demo's `lastInputOutcome` on forked Provide Input is exactly this case; it was hidden while
-   every variable was task-scoped. Retrying the completion succeeds.
+5. ~~Wiring the first host is the next plan.~~ Done: the `preview.14` upgrade for the first host is prepared in its private deployment repository.
+6. ~~Two forked branches completing at the same moment can both insert the same new run-scoped
+   variable.~~ Fixed in `preview.16`. This was described wrongly here: the unique index excluded
+   run-scoped rows, so the second insert *succeeded*, and every later completion in that run
+   failed on the duplicate name. A filtered unique index now covers them, and writes serialize
+   on the run.
 7. The demo's runner showed no complete button for the assignee during the 2026-10-15 browser
    check; the step was completed through `/documenttasks/complete` instead. Not investigated.
 
@@ -56,7 +62,65 @@ older than the fixes worth shipping — so the work went out as `preview.3` rath
 force-pushing a public tag onto different content. The stale tag was deleted from GitHub on
 2026-10-01, so the tags now match the registry: `preview.1`, `preview.3`, `preview.4`.
 
+### `0.1.0-preview.16` — consistency, 2026-10-22
+
+The rest of section A of [`docs/1.0-readiness.md`](docs/1.0-readiness.md) (A4–A9), and a second,
+external review of `preview.15` that reported 22 issues, 16 of them new. Most are what happens
+when two operations meet, or one fails half-way: a step completed twice, an outbox message sent
+twice, a rolled-back completion that the context still believed had happened. The upgrade notes,
+with the SQL to run first, are [`docs/consistency-upgrade.md`](docs/consistency-upgrade.md).
+
+#### Before you take this version
+
+1. **There is a migration.** Two nullable columns (`TaskRouterTasks.ReminderLastCheckedAt`,
+   `TaskRouterOutbox.EventPayload`) and three filtered indexes, two of them unique: one
+   run-scoped variable per name, one latest published version per workflow. Existing
+   duplicates stop the migration; the upgrade notes give the queries to find them.
+2. **A default route is a fallback.** It is taken only when no other route for the outcome
+   applies; it used to be followed alongside them. It cannot have a condition (the validator
+   refuses one; the condition was always ignored). The builder used to make every route a
+   default, so check published workflows with the upgrade notes' query.
+3. **Sending branches back needs a route marked rework.** Selective rejection used to take
+   the first route for the outcome, whatever it was.
+4. **A step with no matching route cannot be completed.** It used to complete and, with
+   nothing else open, end the run as Completed.
+5. **Concurrent operations on one run take turns**, through a lock on the run row. The loser of
+   a genuine race gets "The workflow changed while this operation was running. Reload and try
+   again." (HTTP 409) instead of a duplicate.
+6. **`IWorkflowPostCommitActions` gains `Checkpoint()` and `Rewind(int)`.** Only a host with
+   its own implementation needs to change.
+7. **`WorkflowActions` takes the source task and dispatcher** to raise custom events; the
+   four-argument constructor still works for assigning and cancelling.
+8. **"Step is reached" now fires** for branches added to a running fork and for a
+   sub-workflow's first step, and fires before automatic sub-workflows start on every path.
+
+#### What it fixes
+
+- A failed operation restores the context's tracked entities and discards its post-commit
+  callbacks, so the next operation on the same context sees the database as it is. Inside a
+  transaction already open, work uses a savepoint when the connection has them, and joins as
+  before when it does not (SQL Server with MARS).
+- Outbox messages are claimed one at a time with a conditional update, and carry the task and
+  branch as they were when the event happened. A recorded success is not run again.
+- A trigger that calls back into the engine no longer drops a terminal step queued to close
+  itself. `RaiseEventAsync` now actually raises the event.
+- Ad-hoc steps must come from the parent's version, under an open parent in a running run.
+- Convergence and rework keep their parent; rework starts with whoever did the branch (a
+  configured assignment role still decides first).
+- Reminders rotate through every candidate instead of re-reading the same first hundred.
+- The completion confirmation follows the cascade: steps that close themselves, sub-workflows
+  that finish, the run completing.
+- Publishing serializes per workflow; two publishes cannot both leave a latest version.
+- Test-run discard is one transaction and removes its outbox rows.
+- The origin view keeps a run in rework; progress counts branches separately; the HTTP
+  runner's cancellation reason arrives.
+- Trigger conditions and route conditions are checked at publish.
+
+793 tests, all passing.
+
 ### `0.1.0-preview.15` — what the review confirmed, fixed, 2026-10-21
+
+Committed as `9b2fd33` and `37a9117`, tagged `v0.1.0-preview.15` and published 2026-10-21.
 
 The three defects [`docs/1.0-readiness.md`](docs/1.0-readiness.md) confirmed against SQL Server
 (A1–A3), and a builder bug that made Send Notification unsaveable. No schema change, no new

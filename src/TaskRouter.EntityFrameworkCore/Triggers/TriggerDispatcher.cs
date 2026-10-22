@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Builder;
@@ -101,11 +102,11 @@ public sealed class TriggerDispatcher(
                     break;
 
                 case TriggerDispatchMode.AfterCommit:
-                    Enqueue(definition, task, eventKind, actorId, customEventName, key);
+                    Enqueue(definition, task, eventKind, actorId, customEventName, key, context);
                     break;
 
                 case TriggerDispatchMode.Background:
-                    Enqueue(definition, task, eventKind, actorId, customEventName, key);
+                    Enqueue(definition, task, eventKind, actorId, customEventName, key, context);
                     SignalAfterCommit(definition, task, eventKind, key);
                     break;
 
@@ -152,6 +153,10 @@ public sealed class TriggerDispatcher(
             {
                 continue;
             }
+
+            if (trigger is SetVariableTrigger && definition.DispatchMode == TriggerDispatchMode.InTransaction
+                && context.Variables is PreviewVariables)
+                await trigger.ExecuteAsync(With(context, definition), ct).ConfigureAwait(false);
 
             string? said;
 
@@ -332,7 +337,8 @@ public sealed class TriggerDispatcher(
         WorkflowEventKind eventKind,
         string actorId,
         string? customEventName,
-        string idempotencyKey) =>
+        string idempotencyKey,
+        WorkflowTriggerContext context) =>
         db.WorkflowOutbox.Add(new WorkflowOutboxMessage
         {
             TriggerDefinitionId = definition.Id,
@@ -341,6 +347,7 @@ public sealed class TriggerDispatcher(
             CustomEventName = customEventName,
             IdempotencyKey = idempotencyKey,
             ActorId = actorId,
+            EventPayload = JsonSerializer.Serialize(new WorkflowEventPayload(1, context.Task, context.Branch)),
             DispatchMode = definition.DispatchMode,
             Status = OutboxStatus.Pending,
             NextAttemptAt = DateTime.UtcNow,
@@ -394,14 +401,14 @@ public sealed class TriggerDispatcher(
             Event = eventKind,
             CustomEventName = customEventName,
             Task = self.ToSnapshot(),
-            Run = run.ToSnapshot(tasks),
+            Run = preview?.Run ?? run.ToSnapshot(tasks),
             Branch = branch,
             Config = TriggerConfig.Empty,
             ActorId = actorId,
-            Variables = new WorkflowVariables(db, task.WorkflowRunId, task.Id),
+            Variables = preview?.Variables ?? new WorkflowVariables(db, task.WorkflowRunId, task.Id),
             Actions = new WorkflowActions(
                 (IWorkflowEngine)services.GetService(typeof(IWorkflowEngine))!,
-                db, task.WorkflowRunId, actorId),
+                db, task.WorkflowRunId, actorId, task.Id, this),
             Services = services,
             Preview = preview
         };

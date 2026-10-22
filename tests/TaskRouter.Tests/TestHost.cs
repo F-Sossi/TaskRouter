@@ -72,10 +72,15 @@ public sealed class TestHost : IAsyncDisposable
         IWorkflowDueDateResolver? dueDates = null,
         IWorkflowAuthorizationPolicy? policy = null,
         Func<DemoDbContext, IWorkflowAuthorizationPolicy>? policyFactory = null,
-        Func<DemoDbContext, IWorkflowAssignmentResolver>? assignmentResolver = null)
+        Func<DemoDbContext, IWorkflowAssignmentResolver>? assignmentResolver = null,
+        string? connectionOptions = null)
     {
         var name = $"WorkflowTest_{Guid.NewGuid():N}";
-        var cs = $"{BaseConnectionString};Database={name}";
+
+        // connectionOptions lets a test run the host on a different kind of connection --
+        // MultipleActiveResultSets, which takes savepoints away -- without its own fixture.
+        var cs = $"{BaseConnectionString};Database={name}"
+            + (connectionOptions is null ? string.Empty : $";{connectionOptions}");
 
         if (!withTriggers)
         {

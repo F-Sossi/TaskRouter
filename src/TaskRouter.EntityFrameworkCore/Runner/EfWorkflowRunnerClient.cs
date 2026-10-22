@@ -482,7 +482,12 @@ public sealed class EfWorkflowRunnerClient(
             .OrderBy(t => t.AssignedBranchKey)
             .Select(t => new
             {
-                t.Id, t.AssignedBranchKey, t.Status, t.OutcomeKey, t.AssignedToActorId, t.Notes
+                t.Id,
+                t.AssignedBranchKey,
+                t.Status,
+                t.OutcomeKey,
+                t.AssignedToActorId,
+                t.Notes
             })
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -811,25 +816,22 @@ public sealed class EfWorkflowRunnerClient(
 
     public async Task<RunnerResult> DeleteTestRunAsync(
         int runId, string actorId, CancellationToken ct = default)
-    {
-        var run = await db.WorkflowRuns.SingleOrDefaultAsync(r => r.Id == runId, ct).ConfigureAwait(false);
-
-        if (run is null)
+        => Flatten(await Try.RunAsync(() => WorkflowTransaction.ExecuteAsync(db, async token =>
         {
-            return RunnerResult.Failed($"Run {runId} not found.");
-        }
+            await WorkflowSerialization.RunAsync(db, runId, token).ConfigureAwait(false);
 
-        // The guard is the point: this is a hard delete, and it must never be reachable
-        // for work someone actually did.
-        if (!run.IsTest)
-        {
-            return RunnerResult.Failed("Only test runs can be deleted.");
-        }
+            var run = await db.WorkflowRuns.SingleOrDefaultAsync(r => r.Id == runId, token).ConfigureAwait(false)
+                ?? throw new WorkflowNotFoundException("Run", runId.ToString());
 
-        await TestRunTeardown.DiscardAsync(db, run, ct).ConfigureAwait(false);
+            // The guard is the point: this is a hard delete, and it must never be reachable
+            // for work someone actually did.
+            if (!run.IsTest)
+            {
+                throw new InvalidOperationException("Only test runs can be deleted.");
+            }
 
-        return RunnerResult.Ok;
-    }
+            await TestRunTeardown.DiscardCoreAsync(db, run, token).ConfigureAwait(false);
+        }, ct)).ConfigureAwait(false));
 
     // ───────────────────────────────── Mapping ─────────────────────────────────
 

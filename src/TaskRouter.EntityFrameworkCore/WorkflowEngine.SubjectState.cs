@@ -220,13 +220,15 @@ public sealed partial class WorkflowEngine
                      && r.Task.ForkGroupId is not null
                      && openBranchCounts.ContainsKey(r.Task.ForkGroupId.Value))
             .Select(r => new CurrentTask(
-                r.Task.ToSnapshot(), openBranchCounts[r.Task.ForkGroupId!.Value]));
+                r.Task.ToSnapshot(), openBranchCounts[r.Task.ForkGroupId!.Value])).ToList();
+
+        var represented = live.Select(task => task.Task.ForkGroupId!.Value).ToHashSet();
 
         // Open tasks that are not part of a still-running fork. A branch whose origin is
         // being reported in its place is dropped; anything else stands on its own.
         var standalone = open
             .Where(r => r.Task.ForkGroupId is null
-                     || !openBranchCounts.ContainsKey(r.Task.ForkGroupId.Value))
+                     || !represented.Contains(r.Task.ForkGroupId.Value))
             .Select(r => new CurrentTask(r.Task.ToSnapshot(), 0));
 
         return [.. live.Concat(standalone).OrderBy(c => c.Task.Id)];

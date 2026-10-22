@@ -534,7 +534,9 @@ else
             { x => x.Model, route },
             { x => x.Outcomes, task.Outcomes },
             { x => x.Targets, _model!.Tasks.Where(t => t.LocalId != task.LocalId).ToList() },
-            { x => x.Conditions, _conditions }
+            { x => x.Conditions, _conditions },
+            { x => x.Siblings, task.Routes },
+            { x => x.IsNew, isNew }
         };
 
         var dialog = await Dialogs.ShowAsync<RouteEditDialog>(

@@ -145,10 +145,7 @@ public sealed partial class WorkflowEngine
 
             foreach (var branch in branches)
             {
-                await SpawnAutomaticAsync(branch, actorId, token).ConfigureAwait(false);
-
-                await FireAsync(branch, WorkflowEventKind.TaskCreated, actorId, ct: token)
-                    .ConfigureAwait(false);
+                await TaskCreatedAsync(branch, actorId, token).ConfigureAwait(false);
             }
 
             return new ForkResult(
@@ -168,6 +165,11 @@ public sealed partial class WorkflowEngine
         Try.RunAsync(() => InTransactionAsync(async token =>
         {
             ArgumentNullException.ThrowIfNull(rejectedBranchKeys);
+
+            if (rejectedBranchKeys.Distinct(StringComparer.Ordinal).Count() != rejectedBranchKeys.Count)
+                throw new ArgumentException("Duplicate rejected branch keys are not allowed.", nameof(rejectedBranchKeys));
+
+            await WorkflowSerialization.TaskAsync(db, convergenceTaskId, token).ConfigureAwait(false);
 
             var task = await db.WorkflowTasks
                 .Include(t => t.TaskDefinition!).ThenInclude(d => d.TaskType)
@@ -212,18 +214,16 @@ public sealed partial class WorkflowEngine
                     $"Branch key(s) not in the fork manifest: {string.Join(", ", unknown)}.");
             }
 
-            var reworkOutcomeId =
-                await ResolveOutcomeIdAsync(task.TaskDefinitionId, outcomeKey, token)
-                    .ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"This task declares no outcome '{outcomeKey}'.");
-
-            var reworkRoute = await db.WorkflowTaskRoutes
-                .Include(r => r.NextTaskDefinition!).ThenInclude(d => d.TaskType)
-                .FirstOrDefaultAsync(r => r.TaskDefinitionId == task.TaskDefinitionId
-                                       && r.TaskOutcomeDefinitionId == reworkOutcomeId
-                                       && !r.IsArchived, token).ConfigureAwait(false)
-                ?? throw new InvalidOperationException($"No route for outcome '{outcomeKey}'.");
+            var projection = task.ToSnapshot() with
+            {
+                Status = WorkflowTaskStatus.Completed,
+                OutcomeKey = outcomeKey,
+                CompletedDate = now
+            };
+            var eligible = await GetValidRoutesAsync(task, outcomeKey, token, projection).ConfigureAwait(false);
+            if (eligible.Count != 1 || !eligible[0].IsReworkRoute)
+                throw new InvalidOperationException("Selective rejection requires exactly one eligible rework route.");
+            var reworkRoute = eligible[0];
 
             var reworkDef = reworkRoute.NextTaskDefinition
                 ?? throw new InvalidOperationException("Rework route has no target definition.");
@@ -274,6 +274,7 @@ public sealed partial class WorkflowEngine
                 rework.ForkGroupId = newForkGroupId;
                 rework.ConvergenceTaskDefinitionId = task.TaskDefinitionId;
                 rework.SubWorkflowInstanceId = task.SubWorkflowInstanceId;
+                rework.ParentTaskId = task.ParentTaskId;
                 rework.Notes = $"Rework requested. Previous notes: {entry.BranchNotes}";
 
                 reworkTasks.Add(rework);
@@ -316,10 +317,7 @@ public sealed partial class WorkflowEngine
 
             foreach (var rework in reworkTasks)
             {
-                await SpawnAutomaticAsync(rework, actorId, token).ConfigureAwait(false);
-
-                await FireAsync(rework, WorkflowEventKind.TaskCreated, actorId, ct: token)
-                    .ConfigureAwait(false);
+                await TaskCreatedAsync(rework, actorId, token).ConfigureAwait(false);
             }
         }, ct));
 

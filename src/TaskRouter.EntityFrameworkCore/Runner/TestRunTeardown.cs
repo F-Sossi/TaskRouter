@@ -20,13 +20,25 @@ namespace TaskRouter.EntityFrameworkCore.Runner;
 /// </summary>
 internal static class TestRunTeardown
 {
-    internal static async Task DiscardAsync(
-        IWorkflowDbContext db, WorkflowRun run, CancellationToken ct)
+    internal static Task DiscardAsync(IWorkflowDbContext db, WorkflowRun run, CancellationToken ct) =>
+        WorkflowTransaction.ExecuteAsync(db, token => DiscardCoreAsync(db, run, token), ct);
+
+    /// <summary>The teardown itself, for a caller already inside a workflow transaction.</summary>
+    internal static async Task DiscardCoreAsync(IWorkflowDbContext db, WorkflowRun run, CancellationToken ct)
     {
         var runId = run.Id;
+        await WorkflowSerialization.RunAsync(db, runId, ct).ConfigureAwait(false);
+        if (!await db.WorkflowRuns.AnyAsync(candidate => candidate.Id == runId && candidate.IsTest, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("Only test runs can be deleted.");
 
         var taskIds = await db.WorkflowTasks
             .Where(t => t.WorkflowRunId == runId).Select(t => t.Id).ToListAsync(ct).ConfigureAwait(false);
+
+        if (await db.WorkflowOutbox.AnyAsync(message => taskIds.Contains(message.TaskId)
+                && message.LeaseId != null && message.LeasedUntil > DateTime.UtcNow, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("A test-run trigger is being processed. Retry deletion after it finishes.");
+        var outbox = await db.WorkflowOutbox.Where(message => taskIds.Contains(message.TaskId)).ToListAsync(ct).ConfigureAwait(false);
+        db.WorkflowOutbox.RemoveRange(outbox);
 
         db.WorkflowTaskLogs.RemoveRange(
             await db.WorkflowTaskLogs.Where(l => taskIds.Contains(l.TaskId))

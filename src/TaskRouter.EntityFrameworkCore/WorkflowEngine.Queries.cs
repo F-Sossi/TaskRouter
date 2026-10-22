@@ -83,6 +83,7 @@ public sealed partial class WorkflowEngine
         CancellationToken ct = default) =>
         Try.RunAsync(() => InTransactionAsync(async token =>
         {
+            await WorkflowSerialization.RunAsync(db, runId, token).ConfigureAwait(false);
             var run = await db.WorkflowRuns
                 .SingleOrDefaultAsync(r => r.Id == runId, token)
                 .ConfigureAwait(false)
@@ -219,6 +220,15 @@ public sealed partial class WorkflowEngine
                     $"Task definition {taskDefinitionId} is not marked ad-hoc.");
             }
 
+            if (definition.WorkflowDefinitionVersionId != parent.TaskDefinition!.WorkflowDefinitionVersionId)
+                throw new InvalidOperationException("Ad-hoc task must belong to the parent's workflow version.");
+
+            if (parent.Status is not (WorkflowTaskStatus.NotStarted or WorkflowTaskStatus.InProgress)
+                || !await db.WorkflowTasks.AnyAsync(task => task.Id == parent.Id
+                    && (task.Status == WorkflowTaskStatus.NotStarted || task.Status == WorkflowTaskStatus.InProgress)
+                    && task.Run!.Status == WorkflowRunStatus.Running, token).ConfigureAwait(false))
+                throw new InvalidOperationException("Ad-hoc tasks require an open parent in a running workflow.");
+
             // A terminal task is the end of the line: nothing follows it, nothing is
             // delegated from it, and nothing is added under it.
             if (parent.TaskDefinition!.IsTerminal)
@@ -249,10 +259,7 @@ public sealed partial class WorkflowEngine
             Log(task.Id, "Created", $"Ad-hoc task under task {parent.Id}.", actorId, now);
             await db.SaveChangesAsync(token).ConfigureAwait(false);
 
-            await SpawnAutomaticAsync(task, actorId, token).ConfigureAwait(false);
-
-            await FireAsync(task, WorkflowEventKind.TaskCreated, actorId, ct: token)
-                .ConfigureAwait(false);
+            await TaskCreatedAsync(task, actorId, token).ConfigureAwait(false);
 
             return task.ToSnapshot();
         }, ct));

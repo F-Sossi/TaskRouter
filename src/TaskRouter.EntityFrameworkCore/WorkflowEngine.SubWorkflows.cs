@@ -52,7 +52,10 @@ public sealed partial class WorkflowEngine
                 .ConfigureAwait(false);
 
             if (parent.Status is WorkflowTaskStatus.Completed or WorkflowTaskStatus.Cancelled
-                or WorkflowTaskStatus.Forked)
+                or WorkflowTaskStatus.Forked
+                || !await db.WorkflowTasks.AnyAsync(task => task.Id == parent.Id
+                    && (task.Status == WorkflowTaskStatus.NotStarted || task.Status == WorkflowTaskStatus.InProgress)
+                    && task.Run!.Status == WorkflowRunStatus.Running, token).ConfigureAwait(false))
             {
                 throw new InvalidOperationException(
                     $"Cannot attach a sub-workflow to a {parent.Status} task.");
@@ -256,7 +259,7 @@ public sealed partial class WorkflowEngine
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         await FireAsync(task, WorkflowEventKind.SubWorkflowStarted, actorId, ct: ct).ConfigureAwait(false);
-        await FireAsync(task, WorkflowEventKind.TaskCreated, actorId, ct: ct).ConfigureAwait(false);
+        await TaskCreatedAsync(task, actorId, ct).ConfigureAwait(false);
 
         // The name comes from the definition, which is loaded here but not on the
         // instance's navigation property — reading it from there would return blank.
@@ -277,18 +280,29 @@ public sealed partial class WorkflowEngine
     /// </summary>
     private async Task SpawnAutomaticAsync(WorkflowTask task, string actorId, CancellationToken ct)
     {
-        var attachments = await db.WorkflowSubWorkflowAttachments
-            .Where(a => a.TaskDefinitionId == task.TaskDefinitionId && a.IsAutomatic && !a.IsArchived)
-            .OrderBy(a => a.Id)
-            .ToListAsync(ct).ConfigureAwait(false);
-
-        foreach (var attachment in attachments)
+        if (!_automaticSpawnPath.Add(task.TaskDefinitionId))
+            throw new InvalidOperationException("Automatic sub-workflow attachments contain a cycle.");
+        try
         {
-            // Nobody to ask on an automatic spawn, so it inherits the parent as before.
-            await SpawnAsync(task, attachment, actorId, requested: null, notes: null, ct)
-                .ConfigureAwait(false);
+            var attachments = await db.WorkflowSubWorkflowAttachments
+                .Where(a => a.TaskDefinitionId == task.TaskDefinitionId && a.IsAutomatic && !a.IsArchived)
+                .OrderBy(a => a.Id)
+                .ToListAsync(ct).ConfigureAwait(false);
+
+            foreach (var attachment in attachments)
+            {
+                // Nobody to ask on an automatic spawn, so it inherits the parent as before.
+                await SpawnAsync(task, attachment, actorId, requested: null, notes: null, ct)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _automaticSpawnPath.Remove(task.TaskDefinitionId);
         }
     }
+
+    private readonly HashSet<int> _automaticSpawnPath = [];
 
     /// <summary>
     /// Closes an instance once nothing in it is still open, and unblocks the parent.

@@ -17,11 +17,19 @@ public interface IWorkflowPostCommitActions
 
     /// <summary>Runs and clears the queued actions.</summary>
     Task RunAsync(CancellationToken ct = default);
+
+    int Checkpoint();
+
+    void Rewind(int checkpoint);
 }
 
 public sealed class WorkflowPostCommitActions : IWorkflowPostCommitActions
 {
     private readonly List<Func<CancellationToken, Task>> _actions = [];
+
+    public int Checkpoint() => _actions.Count;
+
+    public void Rewind(int checkpoint) => _actions.RemoveRange(checkpoint, _actions.Count - checkpoint);
 
     public void Add(Func<CancellationToken, Task> action)
     {

@@ -55,8 +55,8 @@ the outcome to a route, optionally gated by a named condition the host evaluates
 next task, resolves its assignment, and fires triggers. Repeat until a terminal task.
 
 **Branch.** A forkable step can fan out into one task per **branch key** — an opaque org unit —
-and converge at a named task once every branch finishes. Selective rejection sends some branches
-back for rework while the rest hold.
+and converge at a named task once every branch has finished or been cancelled. Selective
+rejection sends some branches back for rework while the rest hold.
 
 **Delegate.** A **sub-workflow** is an ordinary workflow definition attached to a version, which
 can be started from a task and optionally blocks it until finished. Attach it to the version
@@ -163,6 +163,22 @@ opening a second, so several operations can be made atomic together. One caveat 
 path leaves post-commit actions to whoever owns the outer transaction, so a host that wraps a
 sequence must run `IWorkflowPostCommitActions` itself, or after-commit triggers never fire.
 
+A joined operation takes a **savepoint** when the connection supports one, so if it fails only
+its own work is undone and a caller that catches the failure can carry on. SQL Server with
+`MultipleActiveResultSets=True` has no savepoints; there the operation simply joins, and a
+failure has to roll back the whole transaction.
+
+**A failure leaves the context as it was.** Rolling back a transaction restores rows, not the
+DbContext's tracked entities, and the context is shared with the host. So each operation
+records the tracker before it starts and puts it back if it fails: otherwise a completion that
+rolled back still looks completed to the next call on the same context. The record is cheap —
+only pending changes are copied up front, and an unchanged entity only when it first changes.
+
+**Operations on one run take turns.** Each one first writes to the run's row, a no-op update
+that takes its lock until the transaction ends. A plain read would not do: under read-committed
+snapshot it never blocks, and two completions of one step would both see it open. Task status is
+also a concurrency token, for a context that loaded the task before the other committed.
+
 ### Seams fail differently, deliberately
 
 **Resolvers fail soft.** An assignment or due-date resolver that throws is logged and treated as
@@ -216,6 +232,12 @@ distinction is whether the effect can be undone: progress should be atomic with 
 produced it; an email cannot be un-sent if the transaction rolls back. After-commit work goes
 through a transactional outbox, so it survives a crash between commit and dispatch, and each
 message gets its own scope and transaction — one failing trigger does not fail the batch.
+
+A trigger runs **once per task and event**: its execution, and its outbox message, carry the
+idempotency key `definition:task:event` under a unique index. Events that can legitimately
+happen to one task more than once — `TaskAssigned`, `SubWorkflowCompleted`,
+`SubWorkflowCancelled` and `Custom` — get a fresh suffix each time, `definition:task:event:<guid>`,
+so a step can be reassigned again without the second assignment failing on the index.
 
 ### The validator refuses to publish a broken graph
 

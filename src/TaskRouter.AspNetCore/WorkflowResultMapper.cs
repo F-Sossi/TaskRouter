@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 using TaskRouter.Core.Abstractions;
@@ -54,6 +55,13 @@ internal sealed class WorkflowResultMapper(ILogger<WorkflowResultMapper> logger)
         // What is left after absence, denial and bad input are peeled off is
         // overwhelmingly "the workflow is not in a state where this is allowed" --
         // already completed, cancelled, superseded by a fork.
+        // The engine turns this into an InvalidOperationException with the same message;
+        // this arm is for host code reaching an endpoint without going through it.
+        DbUpdateConcurrencyException => Results.Problem(
+            detail: "The workflow changed while this operation was running. Reload and try again.",
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Conflict"),
+
         InvalidOperationException conflict => Results.Problem(
             detail: conflict.Message,
             statusCode: StatusCodes.Status409Conflict,

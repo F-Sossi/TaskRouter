@@ -37,3 +37,6 @@ Thumbs.db
 
 # Git worktrees for feature branches
 .worktrees/
+
+# Local review notes and harnesses: never published
+/docs/reviews/

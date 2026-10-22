@@ -33,11 +33,15 @@ public static class WorkflowPublishingExtensions
     /// here. <paramref name="entryTask"/> must be one of <paramref name="version"/>'s own
     /// <see cref="WorkflowDefinitionVersion.Tasks"/>.
     /// </summary>
-    public static async Task<IReadOnlyList<ValidationError>> PublishWithEntryTaskAsync(
+    public static Task<IReadOnlyList<ValidationError>> PublishWithEntryTaskAsync(
         this IWorkflowDbContext db,
         WorkflowDefinitionVersion version,
         WorkflowTaskDefinition entryTask,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        WorkflowTransaction.ExecuteAsync(db, token => PublishCoreAsync(db, version, entryTask, token), ct);
+
+    private static async Task<IReadOnlyList<ValidationError>> PublishCoreAsync(
+        IWorkflowDbContext db, WorkflowDefinitionVersion version, WorkflowTaskDefinition entryTask, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(version);
@@ -56,6 +60,8 @@ public static class WorkflowPublishingExtensions
 
         version.EntryTaskDefinitionId = entryTask.Id;
 
+        await WorkflowSerialization.DefinitionAsync(db, version.WorkflowDefinitionId, ct).ConfigureAwait(false);
+
         var errors = WorkflowDefinitionValidator.Validate(version);
 
         if (errors.Count == 0)
@@ -68,12 +74,17 @@ public static class WorkflowPublishingExtensions
                          && v.IsLatest)
                 .ToListAsync(ct).ConfigureAwait(false);
 
+            await db.WorkflowDefinitionVersions.Where(candidate => candidate.WorkflowDefinitionId == version.WorkflowDefinitionId && candidate.Id != version.Id)
+                .ExecuteUpdateAsync(update => update.SetProperty(candidate => candidate.IsLatest, false), ct).ConfigureAwait(false);
+
             foreach (var old in superseded)
             {
                 // Still published: runs pin to a version, and the ones already on it
                 // must keep resolving their routes.
                 old.IsLatest = false;
             }
+
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
             version.IsPublished = true;
             version.IsLatest = true;

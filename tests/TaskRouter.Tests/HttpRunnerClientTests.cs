@@ -262,6 +262,9 @@ public class HttpRunnerClientTests
         var result = await _client.CancelRunAsync(_runId, _actor, "Wrong workflow.");
 
         Assert.IsTrue(result.Success, result.Error);
+        Assert.AreEqual("Wrong workflow.", await _host.Db.WorkflowTaskLogs.AsNoTracking()
+            .Where(log => log.TaskId == _taskId && log.Action == "Cancelled")
+            .Select(log => log.Note).SingleAsync());
 
         var runs = await _client.GetRunsAsync("ChangeRequest", "500");
 

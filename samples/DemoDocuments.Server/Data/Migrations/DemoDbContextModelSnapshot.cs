@@ -901,6 +901,10 @@ namespace DemoDocuments.Server.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("WorkflowDefinitionId")
+                        .IsUnique()
+                        .HasFilter("[IsPublished] = 1 AND [IsLatest] = 1 AND [IsArchived] = 0");
+
                     b.HasIndex("WorkflowDefinitionId", "Version")
                         .IsUnique();
 
@@ -944,6 +948,9 @@ namespace DemoDocuments.Server.Data.Migrations
                     b.Property<int>("Event")
                         .HasColumnType("int");
 
+                    b.Property<string>("EventPayload")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
                         .HasMaxLength(300)
@@ -953,6 +960,7 @@ namespace DemoDocuments.Server.Data.Migrations
                         .HasColumnType("bit");
 
                     b.Property<Guid?>("LeaseId")
+                        .IsConcurrencyToken()
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("LeasedUntil")
@@ -1098,10 +1106,14 @@ namespace DemoDocuments.Server.Data.Migrations
                     b.Property<int?>("ParentTaskId")
                         .HasColumnType("int");
 
+                    b.Property<DateTime?>("ReminderLastCheckedAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime?>("ReminderSentAt")
                         .HasColumnType("datetime2");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
                         .HasColumnType("int");
 
                     b.Property<int?>("SubWorkflowInstanceId")
@@ -1131,6 +1143,9 @@ namespace DemoDocuments.Server.Data.Migrations
 
                     b.HasIndex("AssignedToActorId", "Status")
                         .HasFilter("[Status] IN (0, 1)");
+
+                    b.HasIndex("ReminderLastCheckedAt", "Id")
+                        .HasFilter("[ReminderSentAt] IS NULL");
 
                     b.HasIndex("Status", "ReminderSentAt")
                         .HasFilter("[ReminderSentAt] IS NULL");
@@ -1307,6 +1322,10 @@ namespace DemoDocuments.Server.Data.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("WorkflowRunId", "Name")
+                        .IsUnique()
+                        .HasFilter("[TaskId] IS NULL");
 
                     b.HasIndex("WorkflowRunId", "TaskId", "Name")
                         .IsUnique()

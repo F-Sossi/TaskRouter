@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 using TaskRouter.Core.Abstractions;
 using TaskRouter.Core.Model;
@@ -46,39 +48,45 @@ public sealed class OutboxProcessor(
         var now = DateTime.UtcNow;
 
         var due = await db.WorkflowOutbox
+            .AsNoTracking()
             .Where(m => m.Status == OutboxStatus.Pending
                      && m.NextAttemptAt <= now
                      && (m.LeasedUntil == null || m.LeasedUntil < now))
             .OrderBy(m => m.NextAttemptAt).ThenBy(m => m.Id)
             .Take(maxMessages)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .Select(message => message.Id).ToListAsync(ct).ConfigureAwait(false);
 
         if (due.Count == 0)
         {
             return 0;
         }
 
-        // Claim before doing any work, so a concurrent worker skips these rows.
-        var leaseId = Guid.NewGuid();
-        foreach (var message in due)
-        {
-            message.LeaseId = leaseId;
-            message.LeasedUntil = now.Add(LeaseDuration);
-        }
-
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-
         var attempted = 0;
-
-        foreach (var message in due)
+        foreach (var messageId in due)
         {
-            await ProcessOneAsync(message, ct).ConfigureAwait(false);
-            attempted++;
+            var leaseId = Guid.NewGuid();
+            var claimTime = DateTime.UtcNow;
+            var claimed = await db.WorkflowOutbox.Where(message => message.Id == messageId
+                    && message.Status == OutboxStatus.Pending && message.NextAttemptAt <= claimTime
+                    && (message.LeasedUntil == null || message.LeasedUntil < claimTime))
+                .ExecuteUpdateAsync(update => update.SetProperty(message => message.LeaseId, leaseId)
+                    .SetProperty(message => message.LeasedUntil, claimTime.Add(LeaseDuration)), ct).ConfigureAwait(false);
+            if (claimed == 0) continue;
 
-            // Saved per message rather than per batch: the outcome of one must be
-            // durable before the next runs, or a crash mid-batch loses the record of
-            // work that already happened.
-            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            var processed = await WorkflowTransaction.ExecuteAsync(db, async token =>
+            {
+                var owned = await db.WorkflowOutbox.Where(message => message.Id == messageId
+                        && message.LeaseId == leaseId && message.Status == OutboxStatus.Pending)
+                    .ExecuteUpdateAsync(update => update.SetProperty(message => message.LeaseId, leaseId), token)
+                    .ConfigureAwait(false);
+                if (owned == 0) return false;
+
+                var message = await db.WorkflowOutbox.SingleAsync(message => message.Id == messageId, token).ConfigureAwait(false);
+                await db.Database.GetService<ICurrentDbContext>().Context.Entry(message).ReloadAsync(token).ConfigureAwait(false);
+                await ProcessOneAsync(message, token).ConfigureAwait(false);
+                return true;
+            }, ct).ConfigureAwait(false);
+            if (processed) attempted++;
         }
 
         return attempted;
@@ -109,6 +117,15 @@ public sealed class OutboxProcessor(
         }
 
         execution.Attempt = message.Attempts;
+
+        if (execution.Status == TriggerExecutionStatus.Succeeded)
+        {
+            message.Status = OutboxStatus.Succeeded;
+            message.ProcessedAt = execution.CompletedAt;
+            message.LeaseId = null;
+            message.LeasedUntil = null;
+            return;
+        }
 
         var definition = await db.WorkflowTriggerDefinitions
             .SingleOrDefaultAsync(d => d.Id == message.TriggerDefinitionId, ct).ConfigureAwait(false);
@@ -184,12 +201,13 @@ public sealed class OutboxProcessor(
 
         if (scopeFactory is null)
         {
-            var inlineContext = await BuildContextAsync(db, services, message, definition, ct)
-                .ConfigureAwait(false);
-
-            var inlineTrigger = Resolve(services, definition.TriggerKey);
-            await inlineTrigger.ExecuteAsync(inlineContext, ct).ConfigureAwait(false);
-            return inlineContext.Report.Detail;
+            return await WorkflowTransaction.ExecuteAsync(db, async token =>
+            {
+                var inlineContext = await BuildContextAsync(db, services, message, definition, token).ConfigureAwait(false);
+                var inlineTrigger = Resolve(services, definition.TriggerKey);
+                await inlineTrigger.ExecuteAsync(inlineContext, token).ConfigureAwait(false);
+                return inlineContext.Report.Detail;
+            }, ct, services.GetService<IWorkflowPostCommitActions>()).ConfigureAwait(false);
         }
 
         using var scope = scopeFactory.CreateScope();
@@ -211,7 +229,7 @@ public sealed class OutboxProcessor(
             // The trigger is not required to save: anything it changed on the scoped
             // context is written by the transaction helper, which is what makes "its
             // writes commit together" true.
-        }, ct).ConfigureAwait(false);
+        }, ct, scope.ServiceProvider.GetService<IWorkflowPostCommitActions>()).ConfigureAwait(false);
 
         return context?.Report.Detail;
     }
@@ -269,14 +287,20 @@ public sealed class OutboxProcessor(
             .Where(t => t.WorkflowRunId == task.WorkflowRunId)
             .ToListAsync(ct).ConfigureAwait(false);
 
+        var payload = message.EventPayload is null ? null
+            : JsonSerializer.Deserialize<WorkflowEventPayload>(message.EventPayload)
+                ?? throw new InvalidOperationException("Outbox event payload is invalid.");
+        if (payload is { Version: not 1 })
+            throw new InvalidOperationException($"Unsupported outbox event payload version {payload.Version}.");
+
         return new WorkflowTriggerContext
         {
             Subject = run.Subject,
             Event = message.Event,
             CustomEventName = message.CustomEventName,
-            Task = task.ToSnapshot(),
+            Task = payload?.Task ?? task.ToSnapshot(),
             Run = run.ToSnapshot(tasks),
-            Branch = task.ForkGroupId is null
+            Branch = payload is not null ? payload.Branch : task.ForkGroupId is null
                 ? null
                 : new BranchContext(task.ForkGroupId, task.ForkManifestId, task.AssignedBranchKey, []),
             Config = TriggerConfig.Parse(definition.Configuration),
@@ -284,7 +308,8 @@ public sealed class OutboxProcessor(
             Variables = new WorkflowVariables(db, task.WorkflowRunId, task.Id),
             Actions = new WorkflowActions(
                 (IWorkflowEngine)services.GetService(typeof(IWorkflowEngine))!,
-                db, task.WorkflowRunId, message.ActorId),
+                db, task.WorkflowRunId, message.ActorId, task.Id,
+                services.GetService<IWorkflowTriggerDispatcher>()),
             Services = services
         };
     }

@@ -472,6 +472,8 @@ public class WorkflowTask : WorkflowEntity
     /// </summary>
     public DateTime? ReminderSentAt { get; set; }
 
+    public DateTime? ReminderLastCheckedAt { get; set; }
+
     /// <summary>
     /// When <see cref="WorkflowEventKind.TaskOverdue"/> fired for this task, in
     /// <b>UTC</b>. The same fire-once stamp and row-claim target as
@@ -574,6 +576,8 @@ public class WorkflowOutboxMessage : WorkflowEntity
 
     /// <summary>Set while a worker holds this row, so two workers cannot both run it.</summary>
     public Guid? LeaseId { get; set; }
+
+    public string? EventPayload { get; set; }
     public DateTime? LeasedUntil { get; set; }
 }
 

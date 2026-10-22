@@ -357,6 +357,7 @@ public sealed partial class WorkflowEngine
                 await FireAsync(branch, WorkflowEventKind.BranchAdded, actorId,
                     new BranchContext(forkGroupId, manifest.Id, branch.AssignedBranchKey, []), token)
                     .ConfigureAwait(false);
+                await TaskCreatedAsync(branch, actorId, token).ConfigureAwait(false);
             }
 
             var total = await db.WorkflowTasks

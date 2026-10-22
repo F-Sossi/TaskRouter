@@ -10,7 +10,7 @@ Temporal orchestrate *code*, this routes work between *people*.
 
 > Status: the engine core, persistence, the HTTP endpoints, the builder and runner
 > UI — in process and over HTTP — the trigger runtime, deadlines and escalation all
-> exist and pass 752 integration tests against SQL Server. Timers are the one roadmap
+> exist and pass 793 integration tests against SQL Server. Timers are the one roadmap
 > item left — see [Roadmap](#roadmap). Still a preview: what stands between it and 1.0,
 > including known defects, is in [`docs/1.0-readiness.md`](docs/1.0-readiness.md).
 
@@ -72,6 +72,9 @@ The database is created from migrations and a CR-style workflow is seeded on fir
 `ConfigureTaskRouter()` configures its tables onto the host's `DbContext`, which is
 what lets a task completion and a domain update commit in one transaction. Migrations
 therefore belong to the consumer:
+
+Upgrading to `0.1.0-preview.16` needs a migration and changes some routing behaviour; read
+[the upgrade notes](docs/consistency-upgrade.md) before deploying it.
 
 ```bash
 dotnet ef migrations add <Name> \

@@ -39,7 +39,7 @@ public static class WorkflowProgress
         // branch's task), only the latest instance counts, so a superseded completion
         // does not keep inflating the total.
         var latestPerDefinition = scoped
-            .GroupBy(t => t.TaskDefinitionId)
+            .GroupBy(t => new { t.TaskDefinitionId, t.AssignedBranchKey, t.SubWorkflowInstanceId })
             .Select(g => g.OrderByDescending(t => t.Id).First())
             .ToList();
 

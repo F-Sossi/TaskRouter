@@ -62,6 +62,17 @@ public sealed class WorkflowVariables(IWorkflowDbContext db, int runId, int? tas
         VariableType type = VariableType.String,
         CancellationToken ct = default)
     {
+        if (db.Database.CurrentTransaction is null)
+        {
+            await WorkflowTransaction.ExecuteAsync(db, async token =>
+            {
+                await SetAsync(name, value, type, token).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+            return;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        await WorkflowSerialization.RunAsync(db, runId, ct).ConfigureAwait(false);
         // Tracked first: a variable an earlier trigger on this event added has not been saved,
         // so the database cannot see it, and adding again would violate the unique index.
         var existing = db.WorkflowVariables.Local.FirstOrDefault(
@@ -69,7 +80,7 @@ public sealed class WorkflowVariables(IWorkflowDbContext db, int runId, int? tas
                     && string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase))
             ?? await db.WorkflowVariables
                 .SingleOrDefaultAsync(
-                    v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name == name, ct)
+                    v => v.WorkflowRunId == runId && v.TaskId == taskId && v.Name.ToUpper() == name.ToUpper(), ct)
                 .ConfigureAwait(false);
 
         if (existing is null)
@@ -122,8 +133,11 @@ public sealed class WorkflowActions(
     IWorkflowEngine engine,
     IWorkflowDbContext db,
     int runId,
-    string actorId) : IWorkflowActions
+    string actorId,
+    int? sourceTaskId = null,
+    IWorkflowTriggerDispatcher? dispatcher = null) : IWorkflowActions
 {
+    private static readonly AsyncLocal<int> EventDepth = new();
     public async Task AssignTaskAsync(
         int taskId, WorkflowAssignment assignment, CancellationToken ct = default)
     {
@@ -153,9 +167,30 @@ public sealed class WorkflowActions(
     public async Task RaiseEventAsync(
         string customEventName, string? payloadJson, CancellationToken ct = default)
     {
-        var variables = new WorkflowVariables(db, runId);
-        await variables
-            .SetAsync($"event:{customEventName}", payloadJson, VariableType.Json, ct)
-            .ConfigureAwait(false);
+        ArgumentException.ThrowIfNullOrWhiteSpace(customEventName);
+        if (dispatcher is null || sourceTaskId is null)
+            throw new InvalidOperationException("Raising an event requires a trigger's source task and dispatcher.");
+        if (EventDepth.Value >= 32)
+            throw new InvalidOperationException("Custom event recursion exceeded 32 levels.");
+
+        EventDepth.Value++;
+        try
+        {
+            await WorkflowTransaction.ExecuteAsync(db, async token =>
+            {
+                await WorkflowSerialization.RunAsync(db, runId, token).ConfigureAwait(false);
+                var task = await db.WorkflowTasks.Include(task => task.TaskDefinition!).ThenInclude(definition => definition.TaskType)
+                .SingleAsync(task => task.Id == sourceTaskId && task.WorkflowRunId == runId, token).ConfigureAwait(false);
+                var variables = new WorkflowVariables(db, runId);
+                await variables
+                .SetAsync($"event:{customEventName}", payloadJson, VariableType.Json, token)
+                .ConfigureAwait(false);
+                await dispatcher.DispatchAsync(task, WorkflowEventKind.Custom, actorId, customEventName, ct: token).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            EventDepth.Value--;
+        }
     }
 }

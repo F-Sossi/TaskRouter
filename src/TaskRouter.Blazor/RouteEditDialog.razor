@@ -4,7 +4,7 @@
     <DialogContent>
         <MudStack Spacing="3" Style="min-width:480px">
 
-            <MudSelect T="string" @bind-Value="_edit.OutcomeKey"
+            <MudSelect T="string" Value="_edit.OutcomeKey" ValueChanged="OutcomeChanged"
                        Label="When the outcome is" Variant="Variant.Outlined" Required="true">
                 @foreach (var o in Outcomes)
                 {
@@ -22,7 +22,8 @@
                 }
             </MudSelect>
 
-            <MudSelect T="string" @bind-Value="_edit.ConditionKey"
+            <MudSelect T="string" Value="_edit.ConditionKey"
+                       ValueChanged="@(v => RouteDefaults.ConditionChanged(_edit, v))"
                        Label="Only if condition" Variant="Variant.Outlined" Clearable="true"
                        HelperText="Optional. Registered by the host; blank means always.">
                 @foreach (var c in Conditions)
@@ -31,8 +32,15 @@
                 }
             </MudSelect>
 
+            @* A default is the fallback when nothing else matches, so it cannot have a condition. *@
             <MudSwitch T="bool" @bind-Value="_edit.IsDefault" Color="Color.Primary"
+                       Disabled="@(_edit.ConditionKey is not null)"
                        Label="Default route for this outcome" />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                The default is taken only when no other route for this outcome applies. A route
+                with a condition cannot be the default.
+            </MudText>
 
             <MudSwitch T="bool" @bind-Value="_edit.IsReworkRoute" Color="Color.Warning"
                        Label="Sends work backwards for rework" />
@@ -63,6 +71,12 @@
     [Parameter] public IReadOnlyList<TaskEditModel> Targets { get; set; } = [];
     [Parameter] public IReadOnlyList<string> Conditions { get; set; } = [];
 
+    /// <summary>The task's other routes, which decide whether a new one starts as the default.</summary>
+    [Parameter] public IReadOnlyList<RouteEditModel> Siblings { get; set; } = [];
+
+    /// <summary>A new route is suggested a default each time its outcome is picked.</summary>
+    [Parameter] public bool IsNew { get; set; }
+
     /// <summary>
     /// Edits land here, not on <see cref="Model"/>, so Cancel means cancel. Blazor
     /// passes reference types by reference, so binding straight to the parameter wrote
@@ -71,7 +85,25 @@
     /// </summary>
     private RouteEditModel _edit = new();
 
-    protected override void OnInitialized() => _edit = Model.Clone();
+    protected override void OnInitialized()
+    {
+        _edit = Model.Clone();
+
+        if (IsNew)
+        {
+            _edit.IsDefault = RouteDefaults.Suggest(_edit, Siblings);
+        }
+    }
+
+    private void OutcomeChanged(string? outcomeKey)
+    {
+        _edit.OutcomeKey = outcomeKey ?? string.Empty;
+
+        if (IsNew)
+        {
+            _edit.IsDefault = RouteDefaults.Suggest(_edit, Siblings);
+        }
+    }
 
     private string? _error;
 

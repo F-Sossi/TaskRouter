@@ -79,7 +79,8 @@ public sealed class SetVariableTrigger : IWorkflowTrigger
         var scope = context.Config.GetString("scope");
         var variables = string.Equals(scope, "task", StringComparison.OrdinalIgnoreCase)
             ? context.Variables
-            : (context.Variables as WorkflowVariables)?.ForRun() ?? context.Variables;
+            : (context.Variables as WorkflowVariables)?.ForRun()
+                ?? (IWorkflowVariables?)(context.Variables as PreviewVariables)?.ForRun() ?? context.Variables;
 
         await variables.SetAsync(name, value, VariableType.String, ct).ConfigureAwait(false);
     }

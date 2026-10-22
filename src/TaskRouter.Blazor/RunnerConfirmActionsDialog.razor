@@ -36,7 +36,7 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" AutoFocus="true"
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" autofocus
                    OnClick="@(() => Dialog.Close(DialogResult.Ok(true)))">@OutcomeDisplayName</MudButton>
     </DialogActions>
 </MudDialog>

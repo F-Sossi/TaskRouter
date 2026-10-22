@@ -120,7 +120,7 @@ public sealed class DeadlineProcessor(
                         && !t.Run!.IsTest
                         && t.ReminderSentAt == null
                         && t.TaskDefinition!.ReminderLeadTimeMinutes != null)
-            .OrderBy(t => t.Id)
+            .OrderBy(t => t.ReminderLastCheckedAt).ThenBy(t => t.Id)
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
 
@@ -183,6 +183,12 @@ public sealed class DeadlineProcessor(
 
         foreach (var task in candidates)
         {
+            if (kind == Sweep.Reminder)
+                await db.WorkflowTasks.Where(candidate => candidate.Id == task.Id
+                        && (candidate.Status == WorkflowTaskStatus.NotStarted || candidate.Status == WorkflowTaskStatus.InProgress))
+                    .ExecuteUpdateAsync(update => update.SetProperty(candidate => candidate.ReminderLastCheckedAt, now), ct)
+                    .ConfigureAwait(false);
+
             if (!subjects.TryGetValue(task.WorkflowRunId, out var subject))
             {
                 continue;
@@ -295,13 +301,17 @@ public sealed class DeadlineProcessor(
         // execution strategy. This codebase has got that wrong twice already.
         await WorkflowTransaction.ExecuteAsync(db, async token =>
         {
+            await WorkflowSerialization.RunAsync(db, task.WorkflowRunId, token).ConfigureAwait(false);
+            var open = db.WorkflowTasks.Where(candidate => candidate.Id == task.Id
+                && (candidate.Status == WorkflowTaskStatus.NotStarted || candidate.Status == WorkflowTaskStatus.InProgress)
+                && !candidate.IsArchived && candidate.Run!.Status == WorkflowRunStatus.Running && !candidate.Run.IsTest);
             var claimed = kind switch
             {
-                Sweep.Reminder => await db.WorkflowTasks
+                Sweep.Reminder => await open
                     .Where(t => t.Id == task.Id && t.ReminderSentAt == null)
                     .ExecuteUpdateAsync(s => s.SetProperty(t => t.ReminderSentAt, now), token)
                     .ConfigureAwait(false),
-                Sweep.Overdue => await db.WorkflowTasks
+                Sweep.Overdue => await open
                     .Where(t => t.Id == task.Id && t.OverdueFiredAt == null)
                     .ExecuteUpdateAsync(s => s.SetProperty(t => t.OverdueFiredAt, now), token)
                     .ConfigureAwait(false),

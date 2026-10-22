@@ -179,6 +179,12 @@ talking to the outside world happens after the commit instead.
 > what makes those impossible to bypass — there is no back door that sets a task to Completed
 > without the routing running.
 
+**Routing picks matching routes first, the default only as a fallback.** Every route for the
+outcome whose condition holds (or that has none) is followed; the default is taken only when
+none of them is. A default cannot have a condition. A step that would leave by no route at all
+is refused rather than completed, unless it is terminal or a stand-alone ad-hoc step — otherwise,
+with nothing else open, the run would end as if it had finished.
+
 ---
 
 ## Versions and pinning
@@ -239,6 +245,12 @@ flowchart TB
 **Selective rejection is a separate operation on purpose.** The engine refuses a rejection
 outcome through the ordinary completion path, because it has no way to know *which* branches
 were the problem — and re-forking all of them would discard work already accepted.
+
+**A cancelled branch counts as finished.** Cancelling the last open branch creates the
+convergence step exactly as completing it would — even when every branch was cancelled, because
+what an empty fork means is a decision for whoever holds the convergence step. To end the work
+outright, cancel the run. **Accepting every branch is an ordinary completion** of the
+convergence step: its triggers run and the run moves on.
 
 A **branch key is an opaque string**. In one host it is a section code, in another a region or
 a team; the fork logic is identical either way.
@@ -365,6 +377,15 @@ flowchart TB
 **Rule of thumb: anything that talks to the outside world is AfterCommit.** A webhook inside
 the transaction holds a database lock open for an HTTP call to somebody else's server — and
 rolls back a completed task if their server is down.
+
+**A worker claims one message at a time**, with a conditional update, so two workers never run
+the same message. The message records the task and branch as they were at the event, not as they
+are when it is delivered. Its row stays locked while the trigger runs — keep after-commit
+handlers short.
+
+**A trigger runs once per task and event.** Its key, `definition:task:event`, is unique in both
+the execution log and the outbox. The events that can recur on one task — assignment,
+a sub-workflow finishing or being cancelled, custom events — get a fresh suffix every time.
 
 ---
 

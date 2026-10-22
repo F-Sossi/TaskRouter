@@ -39,6 +39,8 @@ public static class WorkflowModelBuilderExtensions
             e.ToTable("TaskRouterDefinitionVersions");
             e.Property(x => x.SubjectType).HasMaxLength(100);
             e.HasIndex(x => new { x.WorkflowDefinitionId, x.Version }).IsUnique();
+            e.HasIndex(x => x.WorkflowDefinitionId).IsUnique()
+                .HasFilter("[IsPublished] = 1 AND [IsLatest] = 1 AND [IsArchived] = 0");
 
             // Hosts resolve "which workflow starts for this subject type" through this.
             e.HasIndex(x => new { x.SubjectType, x.IsPublished, x.IsLatest });
@@ -239,6 +241,7 @@ public static class WorkflowModelBuilderExtensions
         b.Entity<WorkflowTask>(e =>
         {
             e.ToTable("TaskRouterTasks");
+            e.Property(x => x.Status).IsConcurrencyToken();
             e.Property(x => x.OutcomeKey).HasMaxLength(100);
             e.Property(x => x.AssignedToActorId).HasMaxLength(200);
             e.Property(x => x.AssignedBranchKey).HasMaxLength(200);
@@ -286,6 +289,8 @@ public static class WorkflowModelBuilderExtensions
             // only ever wants its shrinking head.
             e.HasIndex(x => new { x.Status, x.ReminderSentAt })
              .HasFilter("[ReminderSentAt] IS NULL");
+            e.HasIndex(x => new { x.ReminderLastCheckedAt, x.Id })
+                .HasFilter("[ReminderSentAt] IS NULL");
 
             // The overdue sweep's candidate set. DueDate is in the key, unlike the
             // reminder index above, because that query does filter on it — see the
@@ -325,7 +330,10 @@ public static class WorkflowModelBuilderExtensions
         {
             e.ToTable("TaskRouterVariables");
             e.Property(x => x.Name).HasMaxLength(200);
-            e.HasIndex(x => new { x.WorkflowRunId, x.TaskId, x.Name }).IsUnique();
+            e.HasIndex(x => new { x.WorkflowRunId, x.TaskId, x.Name }).IsUnique()
+                .HasFilter("[TaskId] IS NOT NULL");
+            e.HasIndex(x => new { x.WorkflowRunId, x.Name }).IsUnique()
+                .HasFilter("[TaskId] IS NULL");
         });
 
         b.Entity<WorkflowTaskLog>(e =>
@@ -351,6 +359,7 @@ public static class WorkflowModelBuilderExtensions
         b.Entity<WorkflowOutboxMessage>(e =>
         {
             e.ToTable("TaskRouterOutbox");
+            e.Property(x => x.LeaseId).IsConcurrencyToken();
             e.Property(x => x.IdempotencyKey).HasMaxLength(300);
             e.Property(x => x.ActorId).HasMaxLength(200);
             e.HasIndex(x => x.IdempotencyKey).IsUnique();
